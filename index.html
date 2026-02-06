@@ -54,6 +54,7 @@
     </style>
     <!-- Firebase SDK (compat版 - グローバル変数として使用) -->
     <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js"></script>
 </head>
@@ -74,8 +75,12 @@
             measurementId: "G-XPCRQ4KWCH"
         };
         const fbApp = firebase.initializeApp(firebaseConfig);
+        const fbAuth = firebase.auth();
         const fbDb = firebase.firestore();
         const fbStorage = firebase.storage();
+
+        // 匿名ログイン（自動・透過的）
+        const fbAuthReady = fbAuth.signInAnonymously().catch(e => console.error('匿名ログイン失敗:', e));
 
         const { useState, useEffect, useRef, useCallback } = React;
 
@@ -124,8 +129,8 @@
             const [currentModelId, setCurrentModelId] = useState(null);
             const [currentZipFile, setCurrentZipFile] = useState(null);
 
-            // 起動時にモデル一覧読み込み
-            useEffect(() => { loadSavedModels(); }, []);
+            // 起動時に匿名ログイン完了を待ってからモデル一覧読み込み
+            useEffect(() => { fbAuthReady.then(() => loadSavedModels()); }, []);
 
             // モデル一覧読み込み
             const loadSavedModels = async () => {
@@ -138,6 +143,7 @@
             // モデルをFirebaseに保存
             const saveModelToFirebase = async () => {
                 if (!currentZipFile) { setErrorMsg('モデルを読み込んでください'); return; }
+                if (!fbAuth.currentUser) { await fbAuth.signInAnonymously(); }
                 const name = prompt('モデルの名前を入力してください:');
                 if (!name) return;
                 setLoading(true); setLoadingText('モデルを保存中...');
