@@ -1,0 +1,815 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>2.5D VTuber Maker - Ultimate Edition ✨</title>
+    
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Babel (JSX変換) -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Tailwind CSS (デザイン) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Google Fonts (可愛くする) -->
+    <link href="https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@400;700&display=swap" rel="stylesheet">
+
+    <style>
+        body { 
+            margin: 0; 
+            overflow: hidden; 
+            background-color: #f3f4f6; 
+            font-family: 'M PLUS Rounded 1c', sans-serif;
+        }
+        /* スクロールバーをおしゃれに */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-thumb { background: #a5b4fc; border-radius: 3px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        
+        .range-slider {
+            -webkit-appearance: none;
+            width: 100%;
+            height: 6px;
+            border-radius: 3px;
+            background: #e2e8f0;
+            outline: none;
+        }
+        .range-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: #6366f1;
+            cursor: pointer;
+            transition: background .15s ease-in-out;
+        }
+        .range-slider::-webkit-slider-thumb:hover {
+            background: #4f46e5;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useCallback } = React;
+
+        // ==========================================
+        // アイコン (SVG)
+        // ==========================================
+        const Icons = {
+            Layers: ({ className }) => <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><polygon points="12 2 2 7 12 12 22 7 12 2" /><polyline points="2 17 12 22 22 17" /><polyline points="2 12 12 17 22 12" /></svg>,
+            ImageIcon: ({ className }) => <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><rect width="18" height="18" x="3" y="3" rx="2" ry="2" /><circle cx="9" cy="9" r="2" /><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" /></svg>,
+            Upload: ({ className }) => <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" x2="12" y1="3" y2="15" /></svg>,
+            RefreshCw: ({ className }) => <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" /><path d="M8 16H3v5" /></svg>,
+            Move: ({ className }) => <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><polyline points="5 9 2 12 5 15" /><polyline points="9 5 12 2 15 5" /><polyline points="15 19 12 22 9 19" /><polyline points="19 9 22 12 19 15" /><line x1="2" x2="22" y1="12" y2="12" /><line x1="12" x2="12" y1="2" y2="22" /></svg>,
+            Maximize: ({ className }) => <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M8 3H5a2 2 0 0 0-2 2v3" /><path d="M21 8V5a2 2 0 0 0-2-2h-3" /><path d="M3 16v3a2 2 0 0 0 2 2h3" /><path d="M16 21h3a2 2 0 0 0 2-2v-3" /></svg>,
+            RotateCw: ({ className }) => <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /></svg>,
+            Smile: ({ className }) => <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><circle cx="12" cy="12" r="10" /><path d="M8 14s1.5 2 4 2 4-2 4-2" /><line x1="9" x2="9.01" y1="9" y2="9" /><line x1="15" x2="15.01" y1="9" y2="9" /></svg>,
+            Download: ({ className }) => <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" x2="12" y1="15" y2="3" /></svg>,
+            AlertCircle: ({ className }) => <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><circle cx="12" cy="12" r="10" /><line x1="12" x2="12" y1="8" y2="12" /><line x1="12" x2="12.01" y1="16" y2="16" /></svg>,
+            Scissors: ({ className }) => <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><circle cx="6" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><line x1="20" x2="8.12" y1="4" y2="15.88" /><line x1="14.47" x2="20" y1="14.48" y2="20" /><line x1="8.12" x2="12" y1="8.12" y2="12" /></svg>,
+            Target: ({ className }) => <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><circle cx="12" cy="12" r="10" /><circle cx="12" cy="12" r="6" /><circle cx="12" cy="12" r="2" /></svg>,
+            Sliders: ({ className }) => <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><line x1="4" x2="20" y1="21" y2="21" /><line x1="4" x2="20" y1="14" y2="14" /><line x1="4" x2="20" y1="7" y2="7" /><circle cx="12" cy="14" r="2" /><circle cx="8" cy="7" r="2" /><circle cx="16" cy="21" r="2" /></svg>
+        };
+
+        // ==========================================
+        // Main Application
+        // ==========================================
+        const VtuberMaker = () => {
+            const [libsLoaded, setLibsLoaded] = useState(false);
+            const [bgImage, setBgImage] = useState(null);
+            const [model, setModel] = useState(null);
+            const [loading, setLoading] = useState(false);
+            const [loadingText, setLoadingText] = useState('');
+            const [expressions, setExpressions] = useState([]);
+            const [errorMsg, setErrorMsg] = useState('');
+            const [loadProgress, setLoadProgress] = useState(0);
+
+            // Canvas & Pixi
+            const canvasRef = useRef(null);
+            const pixiAppRef = useRef(null);
+            const modelRef = useRef(null);
+            const modelContainerRef = useRef(null);
+            const bgSpriteRef = useRef(null);
+            const maskSpriteRef = useRef(null);
+            const debugRingRef = useRef(null);
+
+            // Transform
+            const [transform, setTransform] = useState({ x: 400, y: 300, scale: 0.1, rotation: 0 });
+
+            // Mask
+            const [isMasked, setIsMasked] = useState(false);
+            const [maskSettings, setMaskSettings] = useState({ radius: 300, y: 0 });
+
+            // Parameters (Dynamic)
+            // allParameters: 全パラメータ（Tickerで強制適用、呼吸等も固定）
+            // parameters: UIに表示する顔系パラメータのみ
+            const [allParameters, setAllParameters] = useState([]);
+            const [parameters, setParameters] = useState([]);
+
+            // 顔関連パラメータのカテゴリ定義
+            const FACE_CATEGORIES = [
+                { key: 'angle', label: '頭の向き', patterns: ['Angle'] },
+                { key: 'eye', label: '目', patterns: ['Eye', 'Brow'] },
+                { key: 'mouth', label: '口', patterns: ['Mouth', 'Lip'] },
+                { key: 'other_face', label: 'その他(顔)', patterns: ['Cheek', 'Nose', 'Face', 'Smile'] },
+            ];
+            const getFaceCategory = (id) => {
+                const lower = id.toLowerCase();
+                for (const cat of FACE_CATEGORIES) {
+                    if (cat.patterns.some(p => lower.includes(p.toLowerCase()))) return cat.key;
+                }
+                return null;
+            };
+            const isFaceParam = (id) => getFaceCategory(id) !== null;
+
+            // カテゴリ折りたたみ状態
+            const [openCategories, setOpenCategories] = useState({ angle: true, eye: true, mouth: false, other_face: false });
+            const toggleCategory = (key) => setOpenCategories(prev => ({ ...prev, [key]: !prev[key] }));
+
+            // Ref for Ticker (全パラメータを強制適用して呼吸等を止める)
+            const allParametersRef = useRef([]);
+            useEffect(() => { allParametersRef.current = allParameters; }, [allParameters]);
+
+            // -------------------------------------------------------------------------
+            // ライブラリの読み込み
+            // -------------------------------------------------------------------------
+            useEffect(() => {
+                const loadScript = (src) => {
+                    return new Promise((resolve, reject) => {
+                        if (document.querySelector(`script[src="${src}"]`)) { resolve(); return; }
+                        const script = document.createElement('script');
+                        script.src = src;
+                        script.async = true;
+                        script.crossOrigin = "anonymous";
+                        script.onload = resolve;
+                        script.onerror = () => {
+                            document.head.removeChild(script);
+                            reject(new Error(`Failed to load script: ${src}`));
+                        };
+                        document.head.appendChild(script);
+                    });
+                };
+
+                const initScripts = async () => {
+                    try {
+                        setLoadingText('ライブラリを準備中...');
+                        await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js');
+                        setLoadProgress(25);
+                        await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pixi.js/6.5.9/browser/pixi.min.js');
+                        setLoadProgress(50);
+                        // Cubism 5 Core
+                        await loadScript('https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js');
+                        setLoadProgress(75);
+                        // Pixi Live2D Display (Cubism 4 support)
+                        if (!window.PIXI?.live2d) {
+                            await loadScript('https://cdn.jsdelivr.net/npm/pixi-live2d-display@0.4.0/dist/cubism4.min.js');
+                        }
+                        setLoadProgress(90);
+                        // Face Mesh
+                        if (!window.FaceMesh) await loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js');
+                        setLoadProgress(100);
+
+                        setLibsLoaded(true);
+                    } catch (e) {
+                        console.error(e);
+                        setErrorMsg('ライブラリの読み込みに失敗しました。リロードしてください。');
+                    }
+                };
+                initScripts();
+            }, []);
+
+            // -------------------------------------------------------------------------
+            // PixiJS 初期化
+            // -------------------------------------------------------------------------
+            useEffect(() => {
+                if (!libsLoaded) return;
+                if (!window.PIXI || !window.PIXI.live2d) return;
+
+                try {
+                    window.PIXI.utils.skipHello();
+                    window.PIXI.live2d.Live2DModel.registerTicker(window.PIXI.Ticker);
+
+                    const app = new window.PIXI.Application({
+                        width: 800, height: 600,
+                        backgroundColor: 0xeeeeee,
+                        antialias: true,
+                        preserveDrawingBuffer: true,
+                        resolution: window.devicePixelRatio || 1,
+                        autoDensity: true,
+                    });
+
+                    if (canvasRef.current) {
+                        canvasRef.current.innerHTML = '';
+                        canvasRef.current.appendChild(app.view);
+                    }
+                    pixiAppRef.current = app;
+
+                    // パラメータ適用は internalModel.update の上書きで処理するため
+                    // Ticker での強制適用は不要
+
+                    return () => {
+                        try { app.destroy(true, { children: true, texture: true, baseTexture: true }); } catch (e) {}
+                    };
+                } catch (e) {
+                    console.error(e);
+                    setErrorMsg("描画エンジンの初期化に失敗しました。");
+                }
+            }, [libsLoaded]);
+
+            // Transform同期
+            useEffect(() => {
+                if (modelContainerRef.current) {
+                    const c = modelContainerRef.current;
+                    c.position.set(transform.x, transform.y);
+                    c.scale.set(transform.scale);
+                    c.rotation = transform.rotation * (Math.PI / 180);
+                }
+            }, [transform]);
+
+            // マスク処理 (Sprite Mask)
+            useEffect(() => {
+                if (!modelContainerRef.current || !pixiAppRef.current) return;
+                const container = modelContainerRef.current;
+                const app = pixiAppRef.current;
+
+                // Cleanup
+                if (maskSpriteRef.current) {
+                    container.mask = null;
+                    if(maskSpriteRef.current.parent === container) container.removeChild(maskSpriteRef.current);
+                    maskSpriteRef.current.destroy({ texture: true, baseTexture: true });
+                    maskSpriteRef.current = null;
+                }
+                if (debugRingRef.current) {
+                    if(debugRingRef.current.parent === container) container.removeChild(debugRingRef.current);
+                    debugRingRef.current.destroy();
+                    debugRingRef.current = null;
+                }
+
+                if (isMasked) {
+                    const graphics = new window.PIXI.Graphics();
+                    graphics.beginFill(0xFFFFFF);
+                    graphics.drawCircle(0, maskSettings.y, maskSettings.radius);
+                    graphics.endFill();
+
+                    const texture = app.renderer.generateTexture(graphics, { resolution: 2, scaleMode: window.PIXI.SCALE_MODES.LINEAR });
+                    const maskSprite = new window.PIXI.Sprite(texture);
+                    maskSprite.anchor.set(0.5, 0.5);
+                    maskSprite.position.set(0, maskSettings.y);
+
+                    container.addChild(maskSprite);
+                    container.mask = maskSprite;
+                    maskSpriteRef.current = maskSprite;
+
+                    const ring = new window.PIXI.Graphics();
+                    ring.lineStyle(4, 0xFF0000, 0.3);
+                    ring.drawCircle(0, maskSettings.y, maskSettings.radius);
+                    container.addChild(ring);
+                    debugRingRef.current = ring;
+                    graphics.destroy();
+                }
+            }, [isMasked, maskSettings, model]);
+
+            // -------------------------------------------------------------------------
+            // ハンドラ関連
+            // -------------------------------------------------------------------------
+            
+            // 画像アップロード
+            const handleImageUpload = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                    const imgUrl = ev.target.result;
+                    setBgImage(imgUrl);
+                    if (!pixiAppRef.current) return;
+                    
+                    if (bgSpriteRef.current) {
+                        pixiAppRef.current.stage.removeChild(bgSpriteRef.current);
+                        bgSpriteRef.current.destroy({ texture: true, baseTexture: true });
+                    }
+                    
+                    const bg = window.PIXI.Sprite.from(imgUrl);
+                    const texture = bg.texture;
+
+                    const setupBg = () => {
+                         const app = pixiAppRef.current;
+                         const maxWidth = 800, maxHeight = 600;
+                         let w = bg.width, h = bg.height;
+                         if (w > maxWidth || h > maxHeight) {
+                             const r = Math.min(maxWidth/w, maxHeight/h);
+                             w *= r; h *= r;
+                             bg.width = w; bg.height = h;
+                         }
+                         app.renderer.resize(w, h);
+                         setTransform(p => ({ ...p, x: w/2, y: h/2 }));
+                    };
+
+                    // 画像が既にロードされているかチェック
+                    if (texture.baseTexture.valid) {
+                        setupBg();
+                    } else {
+                        texture.baseTexture.on('loaded', setupBg);
+                    }
+                    
+                    bg.zIndex = -1;
+                    pixiAppRef.current.stage.addChildAt(bg, 0);
+                    bgSpriteRef.current = bg;
+                };
+                reader.readAsDataURL(file);
+            };
+
+            // ZIPアップロード (Data URI + 自動解析)
+            const handleZipUpload = async (e) => {
+                const file = e.target.files[0];
+                if (!file || !window.JSZip) return;
+                
+                setLoading(true);
+                setLoadingText('ZIPを解析中...');
+                setErrorMsg('');
+                if (window.PIXI?.utils) window.PIXI.utils.clearTextureCache();
+
+                try {
+                    const jsZip = new window.JSZip();
+                    const zip = await jsZip.loadAsync(file);
+
+                    let modelConfigFile = Object.keys(zip.files).find(p => p.toLowerCase().endsWith('.model3.json'));
+                    if (!modelConfigFile) throw new Error('.model3.json が見つかりません。');
+
+                    // VTube Studio Config
+                    let vtubeConfigFile = Object.keys(zip.files).find(p => p.toLowerCase().endsWith('.vtube.json'));
+                    let vtubeSettings = null;
+                    if (vtubeConfigFile) {
+                        try {
+                            const txt = await zip.files[vtubeConfigFile].async('string');
+                            vtubeSettings = JSON.parse(txt);
+                        } catch(e) { console.warn(e); }
+                    }
+
+                    setLoadingText('リソースを展開中...');
+                    const fileMap = {};
+                    const filePaths = Object.keys(zip.files);
+                    
+                    await Promise.all(filePaths.map(async (path) => {
+                        if (!zip.files[path].dir) {
+                            let mime = 'application/octet-stream';
+                            const lp = path.toLowerCase();
+                            if (lp.endsWith('.png')) mime = 'image/png';
+                            else if (lp.endsWith('.jpg') || lp.endsWith('.jpeg')) mime = 'image/jpeg';
+                            else if (lp.endsWith('.json')) mime = 'application/json';
+                            else if (lp.endsWith('.moc3')) mime = 'application/octet-stream';
+
+                            const base64 = await zip.files[path].async('base64');
+                            const dataUrl = `data:${mime};base64,${base64}`;
+                            const normalized = path.replace(/\\/g, '/');
+                            fileMap[normalized] = dataUrl;
+                            fileMap[normalized.toLowerCase()] = dataUrl;
+                        }
+                    }));
+
+                    const modelJsonText = await zip.files[modelConfigFile].async('string');
+                    let modelJsonObj = JSON.parse(modelJsonText);
+
+                    // パス解決
+                    const normalizedConfigPath = modelConfigFile.replace(/\\/g, '/');
+                    const basePath = normalizedConfigPath.includes('/') 
+                        ? normalizedConfigPath.substring(0, normalizedConfigPath.lastIndexOf('/') + 1) 
+                        : '';
+                    
+                    const resolveUrl = (target) => {
+                        let t = target.replace(/\\/g, '/').replace(/^\.\//, '');
+                        const full = basePath + t;
+                        if(fileMap[full]) return fileMap[full];
+                        if(fileMap[full.toLowerCase()]) return fileMap[full.toLowerCase()];
+                        if(fileMap[t]) return fileMap[t];
+                        if(fileMap[t.toLowerCase()]) return fileMap[t.toLowerCase()];
+                        // Fuzzy
+                        const fname = t.split('/').pop().toLowerCase();
+                        const match = Object.keys(fileMap).find(k => k.toLowerCase().endsWith('/' + fname) || k.toLowerCase() === fname);
+                        if(match) return fileMap[match];
+                        return null;
+                    };
+
+                    const replaceRecursive = (obj) => {
+                        for (const k in obj) {
+                            if (typeof obj[k] === 'string' && obj[k].length > 4) {
+                                const url = resolveUrl(obj[k]);
+                                if(url) obj[k] = url;
+                            } else if (typeof obj[k] === 'object' && obj[k] !== null) {
+                                replaceRecursive(obj[k]);
+                            }
+                        }
+                    };
+                    replaceRecursive(modelJsonObj);
+                    modelJsonObj.url = `model_${Date.now()}.model3.json`;
+
+                    setLoadingText('モデルを構築中...');
+                    const { Live2DModel } = window.PIXI.live2d;
+
+                    if (modelContainerRef.current) {
+                        pixiAppRef.current.stage.removeChild(modelContainerRef.current);
+                        modelContainerRef.current.destroy({ children: true });
+                        modelContainerRef.current = null;
+                        modelRef.current = null;
+                    }
+
+                    const model = await Live2DModel.from(modelJsonObj, { autoInteract: false });
+                    model.anchor.set(0.5, 0.5);
+                    model.autoplay = false; // Stop auto play
+
+                    // ★ 自動アニメーション完全停止
+                    // internalModel.update を丸ごと上書きして
+                    // モーション・呼吸・物理・目パチを全てスキップする
+                    const im = model.internalModel;
+                    if (im) {
+                        im.update = function(dt, now) {
+                            const core = im.coreModel;
+                            if (!core) return;
+
+                            // allParametersRef から全パラメータを強制適用
+                            const currentParams = allParametersRef.current;
+                            if (currentParams.length > 0) {
+                                if (core.setParameterValueById) {
+                                    currentParams.forEach(p => core.setParameterValueById(p.id, p.value));
+                                } else if (core.setParamFloat) {
+                                    currentParams.forEach(p => core.setParamFloat(p.id, p.value));
+                                }
+                            }
+
+                            // ポーズ更新（パーツ表示/非表示の管理のみ残す）
+                            if (im.pose && im.pose.updateParameters) {
+                                im.pose.updateParameters(core, dt);
+                            }
+
+                            // コアモデル更新（パラメータ値をドローアブルに反映）
+                            if (core.update) core.update();
+                        };
+                    }
+
+                    // パラメータ抽出
+                    const core = model.internalModel.coreModel;
+                    let extracted = [];
+                    if (core) {
+                        let ids = [], mins = [], maxs = [], defs = [];
+
+                        // Cubism 4: coreModel は Framework の CubismModel ラッパー
+                        // 生のコアモデル (Live2DCubismCore.Model) は _model にある
+                        const rawCore = core._model || core;
+                        if (rawCore && rawCore.parameters && rawCore.parameters.count > 0) {
+                            const params = rawCore.parameters;
+                            for (let i = 0; i < params.count; i++) {
+                                ids.push(params.ids[i]);
+                                mins.push(params.minimumValues[i]);
+                                maxs.push(params.maximumValues[i]);
+                                defs.push(params.defaultValues[i]);
+                            }
+                        } else if (core.getParamIds) { // Cubism 2
+                             ids = core.getParamIds();
+                             mins = core.getParamMinimumValues();
+                             maxs = core.getParamMaximumValues();
+                             defs = core.getParamDefaultValues();
+                        }
+
+                        if (ids && ids.length > 0) {
+                            extracted = ids.map((id, i) => {
+                                let val = defs[i];
+                                try {
+                                    if(core.getParameterValueById) val = core.getParameterValueById(id);
+                                    else if(core.getParamFloat) val = core.getParamFloat(id);
+                                } catch(e){}
+                                if (val == null || isNaN(val)) val = defs[i] ?? 0;
+
+                                // VTube Studioの設定があれば名前を上書き
+                                let name = id;
+                                if (vtubeSettings && vtubeSettings.ParameterSettings) {
+                                    const match = vtubeSettings.ParameterSettings.find(s => s.OutputLive2D === id);
+                                    if(match) name = match.Name;
+                                }
+
+                                return { id, min: mins[i], max: maxs[i], default: defs[i], value: val, name };
+                            });
+                        }
+                    }
+                    // 全パラメータ保持（Tickerで呼吸等も含め全て強制上書き）
+                    setAllParameters(extracted);
+                    // UIには顔関連パラメータのみ表示
+                    setParameters(extracted.filter(p => isFaceParam(p.id)));
+                    
+                    // コンテナ配置
+                    const container = new window.PIXI.Container();
+                    container.addChild(model);
+                    // screen はCSS論理ピクセル（ステージ座標系と一致）
+                    const screenW = pixiAppRef.current.renderer.screen.width;
+                    const screenH = pixiAppRef.current.renderer.screen.height;
+                    const scale = (screenH * 0.5) / model.height;
+                    container.scale.set(scale);
+                    container.position.set(screenW / 2, screenH / 2);
+                    
+                    // ドラッグ設定
+                    container.interactive = true;
+                    container.buttonMode = true;
+                    container.on('pointerdown', onDragStart);
+
+                    // pointermove/pointerup はステージ全体で受け取る（高速ドラッグ対応）
+                    const stage = pixiAppRef.current.stage;
+                    stage.interactive = true;
+                    stage.hitArea = new window.PIXI.Rectangle(0, 0, screenW, screenH);
+                    stage.on('pointermove', onDragMove);
+                    stage.on('pointerup', onDragEnd);
+                    stage.on('pointerupoutside', onDragEnd);
+
+                    stage.addChild(container);
+                    modelRef.current = model;
+                    modelContainerRef.current = container;
+                    setModel(model);
+                    
+                    setTransform({ x: container.x, y: container.y, scale, rotation: 0 });
+                    
+                    if (model.internalModel.settings.expressions) {
+                        setExpressions(model.internalModel.settings.expressions.map(e => e.Name));
+                    } else {
+                        setExpressions([]);
+                    }
+                    
+                    setLoading(false);
+
+                } catch (e) {
+                    console.error(e);
+                    setErrorMsg('読み込みエラー: ' + e.message);
+                    setLoading(false);
+                }
+            };
+
+            const handleParamChange = (id, val) => {
+                const v = parseFloat(val);
+                setParameters(prev => prev.map(p => p.id === id ? { ...p, value: v } : p));
+                setAllParameters(prev => prev.map(p => p.id === id ? { ...p, value: v } : p));
+            };
+
+            // Dragging
+            const dragData = useRef({ dragging: false, data: null, offset: {x:0, y:0} });
+            const onDragStart = (e) => {
+                const c = e.currentTarget;
+                dragData.current.dragging = true;
+                dragData.current.data = e.data;
+                const pos = dragData.current.data.getLocalPosition(c.parent);
+                dragData.current.offset.x = pos.x - c.x;
+                dragData.current.offset.y = pos.y - c.y;
+            };
+            const onDragEnd = () => { dragData.current.dragging = false; dragData.current.data = null; };
+            const onDragMove = () => {
+                if(dragData.current.dragging && modelContainerRef.current) {
+                    const c = modelContainerRef.current;
+                    const pos = dragData.current.data.getLocalPosition(c.parent);
+                    const nx = pos.x - dragData.current.offset.x;
+                    const ny = pos.y - dragData.current.offset.y;
+                    c.position.set(nx, ny);
+                    setTransform(prev => ({...prev, x: nx, y: ny}));
+                }
+            };
+
+            // Face Detection
+            const detectFaceAndAlign = async () => {
+                if(!bgImage || !modelRef.current) { alert('画像とモデルを読み込んでね！'); return; }
+                if(!window.FaceMesh) { alert('顔検出ライブラリが読み込まれていません。リロードしてください。'); return; }
+                setLoading(true); setLoadingText('顔を探してるよ...');
+                try {
+                    const faceMesh = new window.FaceMesh({locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}`});
+                    faceMesh.setOptions({maxNumFaces: 1, refineLandmarks: true});
+                    faceMesh.onResults(results => {
+                        if(results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+                            const landmarks = results.multiFaceLandmarks[0];
+                            // 論理ピクセル(ステージ座標系)を使う
+                            const w = pixiAppRef.current.renderer.screen.width;
+                            const h = pixiAppRef.current.renderer.screen.height;
+
+                            // 鼻の位置 (FaceMeshは0-1正規化座標)
+                            const nose = landmarks[1];
+                            const noseX = nose.x * w;
+                            const noseY = nose.y * h;
+
+                            // 顔幅 (頬から頬)
+                            const lCheek = landmarks[454];
+                            const rCheek = landmarks[234];
+                            const faceW = Math.hypot((lCheek.x - rCheek.x)*w, (lCheek.y - rCheek.y)*h);
+
+                            // 顔の高さ (おでこ〜あご)
+                            const forehead = landmarks[10];
+                            const chin = landmarks[152];
+                            const faceH = Math.hypot((forehead.x - chin.x)*w, (forehead.y - chin.y)*h);
+
+                            // 角度
+                            const lEye = landmarks[33];
+                            const rEye = landmarks[263];
+                            const dx = (rEye.x - lEye.x) * w;
+                            const dy = (rEye.y - lEye.y) * h;
+                            const angle = Math.atan2(dy, dx) * (180/Math.PI);
+
+                            // モデルサイズ計算
+                            const modelW = modelRef.current.internalModel.width;
+                            const modelH = modelRef.current.internalModel.height;
+                            // モデルの顔幅はモデル全体の約25%と仮定（大きめに合わせる）
+                            const estimatedModelFaceW = modelW * 0.25;
+                            const scale = faceW / estimatedModelFaceW;
+
+                            // モデルのanchor=(0.5,0.5)なのでcontainer位置=モデル中心
+                            // 顔はモデル中心より上にあるため、鼻位置から下にオフセットして
+                            // モデルの顔部分が写真の顔に合うようにする
+                            const faceOffsetY = modelH * 0.25 * scale;
+                            const cx = noseX;
+                            const cy = noseY + faceOffsetY;
+
+                            // 適用
+                            setTransform({ x: cx, y: cy, scale, rotation: angle });
+
+                            // マスクも自動設定 (顔全体が収まるよう大きめに)
+                            const modelFaceCenterY = -(modelH * 0.25);
+                            const maskRadius = (faceH / scale) * 1.3;
+                            setMaskSettings({ y: modelFaceCenterY, radius: maskRadius });
+                            setIsMasked(true);
+
+                            alert('顔発見！位置合わせたよ！');
+                        } else {
+                            alert('顔が見つからなかった...');
+                        }
+                        setLoading(false);
+                    });
+                    const img = new Image();
+                    img.src = bgImage;
+                    img.crossOrigin = "Anonymous";
+                    img.onload = async () => { await faceMesh.send({image: img}); };
+                } catch(e) {
+                    console.error(e);
+                    alert('エラー: ' + e.message);
+                    setLoading(false);
+                }
+            };
+
+            const handleDownload = () => {
+                if (!pixiAppRef.current) return;
+                if (debugRingRef.current) debugRingRef.current.visible = false;
+                pixiAppRef.current.renderer.render(pixiAppRef.current.stage);
+                const a = document.createElement('a');
+                a.download = 'vtuber_image.png';
+                a.href = pixiAppRef.current.view.toDataURL('image/png');
+                a.click();
+                if (debugRingRef.current) debugRingRef.current.visible = true;
+            };
+
+            if (!libsLoaded) {
+                return (
+                    <div className="flex flex-col h-screen items-center justify-center text-gray-600 space-y-4">
+                        <div className="w-16 h-16 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin"></div>
+                        <p className="font-bold">準備中... {loadProgress}%</p>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="flex h-screen overflow-hidden">
+                    {/* Sidebar */}
+                    <div className="w-72 bg-white shadow-xl flex flex-col z-10 border-r border-gray-200">
+                        <div className="px-4 py-3 border-b border-gray-100 bg-white sticky top-0 z-20">
+                            <h1 className="text-base font-bold text-indigo-600 flex items-center gap-2">
+                                <Icons.Layers className="w-5 h-5"/> 2.5D VTuber Maker
+                            </h1>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3">
+                            {/* Uploads */}
+                            <div className="grid grid-cols-2 gap-2">
+                                <label className="flex flex-col items-center justify-center h-16 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:bg-indigo-50 transition-all">
+                                    <Icons.ImageIcon className="w-4 h-4 text-gray-400 mb-0.5"/>
+                                    <span className="text-[10px] text-gray-500 font-bold">1. 写真</span>
+                                    <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
+                                </label>
+                                <label className="flex flex-col items-center justify-center h-16 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:bg-indigo-50 transition-all">
+                                    <Icons.Upload className="w-4 h-4 text-gray-400 mb-0.5"/>
+                                    <span className="text-[10px] text-gray-500 font-bold">2. モデル(ZIP)</span>
+                                    <input type="file" accept=".zip" onChange={handleZipUpload} className="hidden" />
+                                </label>
+                            </div>
+
+                            {errorMsg && <div className="p-2 bg-red-50 text-red-600 text-[10px] rounded-lg flex gap-1"><Icons.AlertCircle className="w-3 h-3 shrink-0 mt-0.5"/>{errorMsg}</div>}
+
+                            {/* Auto Align */}
+                            <button onClick={detectFaceAndAlign} disabled={!bgImage || !model || loading}
+                                className={`w-full py-2 rounded-lg flex items-center justify-center gap-2 font-bold text-xs shadow-sm transition-all ${!bgImage || !model ? 'bg-gray-100 text-gray-400' : 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white hover:shadow-md'}`}>
+                                <Icons.RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`}/>
+                                AI 顔検出＆自動配置
+                            </button>
+
+                            {/* Controls */}
+                            {model && (
+                                <div className="space-y-3">
+                                    {/* Transform */}
+                                    <div className="space-y-1.5">
+                                        <h3 className="text-[10px] font-bold text-gray-500 flex items-center gap-1"><Icons.Move className="w-3 h-3"/> 位置・サイズ</h3>
+                                        <div className="space-y-1">
+                                            <div className="flex items-center gap-2">
+                                                <label className="text-[10px] text-gray-400 w-8 shrink-0">サイズ</label>
+                                                <input type="range" min="0.01" max="1.0" step="0.005" value={transform.scale} onChange={(e)=>setTransform({...transform, scale: Number(e.target.value)})} className="range-slider flex-1"/>
+                                                <span className="text-[10px] text-gray-400 w-8 text-right">{transform.scale.toFixed(2)}</span>
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                <label className="text-[10px] text-gray-400 w-8 shrink-0">回転</label>
+                                                <input type="range" min="-180" max="180" step="1" value={transform.rotation} onChange={(e)=>setTransform({...transform, rotation: Number(e.target.value)})} className="range-slider flex-1"/>
+                                                <span className="text-[10px] text-gray-400 w-8 text-right">{transform.rotation}°</span>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Mask */}
+                                    <div className="p-2 bg-indigo-50 rounded-lg space-y-1.5">
+                                        <div className="flex justify-between items-center">
+                                            <label className="text-[10px] font-bold text-indigo-700 flex gap-1"><Icons.Scissors className="w-3 h-3"/> 円形切り抜き</label>
+                                            <input type="checkbox" checked={isMasked} onChange={(e)=>setIsMasked(e.target.checked)} className="accent-indigo-600 w-3.5 h-3.5"/>
+                                        </div>
+                                        {isMasked && (
+                                            <div className="space-y-1">
+                                                <div className="flex items-center gap-2"><label className="text-[10px] text-indigo-400 w-6 shrink-0">範囲</label><input type="range" min="50" max="1000" value={maskSettings.radius} onChange={(e)=>setMaskSettings({...maskSettings, radius: Number(e.target.value)})} className="range-slider flex-1"/></div>
+                                                <div className="flex items-center gap-2"><label className="text-[10px] text-indigo-400 w-6 shrink-0">Y</label><input type="range" min="-1000" max="1000" value={maskSettings.y} onChange={(e)=>setMaskSettings({...maskSettings, y: Number(e.target.value)})} className="range-slider flex-1"/></div>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* Parameters - カテゴリ別折りたたみ */}
+                                    <div className="space-y-1">
+                                        <h3 className="text-[10px] font-bold text-gray-500 flex items-center gap-1"><Icons.Sliders className="w-3 h-3"/> パラメータ調整</h3>
+                                        <div className="space-y-1 max-h-[calc(100vh-480px)] overflow-y-auto pr-1">
+                                            {FACE_CATEGORIES.map(cat => {
+                                                const catParams = parameters.filter(p => getFaceCategory(p.id) === cat.key);
+                                                if (catParams.length === 0) return null;
+                                                const isOpen = openCategories[cat.key];
+                                                return (
+                                                    <div key={cat.key} className="border border-gray-100 rounded-lg overflow-hidden">
+                                                        <button onClick={() => toggleCategory(cat.key)}
+                                                            className="w-full flex justify-between items-center px-2 py-1.5 bg-gray-50 hover:bg-gray-100 transition-colors text-left">
+                                                            <span className="text-[10px] font-bold text-gray-600">{cat.label} ({catParams.length})</span>
+                                                            <span className="text-[10px] text-gray-400">{isOpen ? '−' : '+'}</span>
+                                                        </button>
+                                                        {isOpen && (
+                                                            <div className="px-2 py-1.5 space-y-1.5">
+                                                                {catParams.map(p => (
+                                                                    <div key={p.id} className="flex items-center gap-1.5">
+                                                                        <span className="text-[9px] font-bold text-gray-600 truncate w-20 shrink-0" title={p.id}>{p.name.replace(/^Param/, '')}</span>
+                                                                        <input type="range"
+                                                                            min={p.min} max={p.max} step={(p.max-p.min)/100 || 0.01}
+                                                                            value={p.value}
+                                                                            onChange={(e)=>handleParamChange(p.id, e.target.value)}
+                                                                            className="range-slider flex-1 accent-pink-500"/>
+                                                                        <span className="text-[9px] text-gray-400 w-7 text-right shrink-0">{p.value.toFixed(1)}</span>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                );
+                                            })}
+                                            {parameters.length === 0 && <p className="text-[10px] text-gray-400 text-center py-2">パラメータなし</p>}
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            <button onClick={handleDownload} disabled={!model} className="w-full py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2 disabled:opacity-50">
+                                <Icons.Download className="w-4 h-4"/> 画像保存
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Canvas */}
+                    <div className="flex-1 bg-gray-200 flex items-center justify-center p-8 relative overflow-hidden">
+                        <div ref={canvasRef} className="shadow-2xl bg-white border-4 border-white rounded-sm relative z-0"></div>
+                        
+                        {/* Loading Overlay */}
+                        {loading && (
+                            <div className="absolute inset-0 bg-black/50 backdrop-blur-sm z-50 flex flex-col items-center justify-center text-white">
+                                <div className="w-12 h-12 border-4 border-white border-t-transparent rounded-full animate-spin mb-4"></div>
+                                <p className="font-bold">{loadingText}</p>
+                            </div>
+                        )}
+
+                        {/* Empty State */}
+                        {!bgImage && !loading && (
+                            <div className="absolute pointer-events-none text-gray-400 flex flex-col items-center">
+                                <Icons.ImageIcon className="w-16 h-16 opacity-20 mb-2"/>
+                                <p>写真をアップロードしてね！</p>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<VtuberMaker />);
+    </script>
+</body>
+</html>
