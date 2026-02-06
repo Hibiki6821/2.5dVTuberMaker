@@ -552,6 +552,16 @@
                 setAllParameters(prev => prev.map(p => p.id === id ? { ...p, value: v } : p));
             };
 
+            const handleParamReset = (id) => {
+                setParameters(prev => prev.map(p => p.id === id ? { ...p, value: p.default } : p));
+                setAllParameters(prev => prev.map(p => p.id === id ? { ...p, value: p.default } : p));
+            };
+
+            const handleAllParamsReset = () => {
+                setParameters(prev => prev.map(p => ({ ...p, value: p.default })));
+                setAllParameters(prev => prev.map(p => ({ ...p, value: p.default })));
+            };
+
             // Dragging
             const dragData = useRef({ dragging: false, data: null, offset: {x:0, y:0} });
             const onDragStart = (e) => {
@@ -741,7 +751,10 @@
 
                                     {/* Parameters - カテゴリ別折りたたみ */}
                                     <div className="space-y-1">
-                                        <h3 className="text-[10px] font-bold text-gray-500 flex items-center gap-1"><Icons.Sliders className="w-3 h-3"/> パラメータ調整</h3>
+                                        <div className="flex justify-between items-center">
+                                            <h3 className="text-[10px] font-bold text-gray-500 flex items-center gap-1"><Icons.Sliders className="w-3 h-3"/> パラメータ調整</h3>
+                                            <button onClick={handleAllParamsReset} className="text-[9px] text-indigo-500 hover:text-indigo-700 font-bold px-1.5 py-0.5 rounded hover:bg-indigo-50 transition-colors">全リセット</button>
+                                        </div>
                                         <div className="space-y-1 max-h-[calc(100vh-480px)] overflow-y-auto pr-1">
                                             {FACE_CATEGORIES.map(cat => {
                                                 const catParams = parameters.filter(p => getFaceCategory(p.id) === cat.key);
@@ -757,14 +770,18 @@
                                                         {isOpen && (
                                                             <div className="px-2 py-1.5 space-y-1.5">
                                                                 {catParams.map(p => (
-                                                                    <div key={p.id} className="flex items-center gap-1.5">
-                                                                        <span className="text-[9px] font-bold text-gray-600 truncate w-20 shrink-0" title={p.id}>{p.name.replace(/^Param/, '')}</span>
+                                                                    <div key={p.id} className="flex items-center gap-1">
+                                                                        <span className="text-[9px] font-bold text-gray-600 truncate w-16 shrink-0" title={p.id}>{p.name.replace(/^Param/, '')}</span>
                                                                         <input type="range"
                                                                             min={p.min} max={p.max} step={(p.max-p.min)/100 || 0.01}
                                                                             value={p.value}
                                                                             onChange={(e)=>handleParamChange(p.id, e.target.value)}
                                                                             className="range-slider flex-1 accent-pink-500"/>
                                                                         <span className="text-[9px] text-gray-400 w-7 text-right shrink-0">{p.value.toFixed(1)}</span>
+                                                                        <button onClick={()=>handleParamReset(p.id)} title="デフォルトに戻す"
+                                                                            className="text-[9px] text-gray-300 hover:text-indigo-500 shrink-0 w-3.5 h-3.5 flex items-center justify-center transition-colors">
+                                                                            <Icons.RefreshCw className="w-2.5 h-2.5"/>
+                                                                        </button>
                                                                     </div>
                                                                 ))}
                                                             </div>
