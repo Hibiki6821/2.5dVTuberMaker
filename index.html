@@ -77,21 +77,6 @@
         const fbDb = firebase.firestore();
         const fbStorage = firebase.storage();
 
-        // 同期コード生成・取得
-        const generateSyncCode = () => {
-            const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-            let code = '';
-            for (let i = 0; i < 12; i++) code += chars[Math.floor(Math.random() * chars.length)];
-            return code;
-        };
-        const getOrCreateSyncCode = () => {
-            let code = localStorage.getItem('vtuber_sync_code');
-            if (!code || code.length < 8) {
-                code = generateSyncCode();
-                localStorage.setItem('vtuber_sync_code', code);
-            }
-            return code;
-        };
         const { useState, useEffect, useRef, useCallback } = React;
 
         // ==========================================
@@ -133,34 +118,19 @@
             const [errorMsg, setErrorMsg] = useState('');
             const [loadProgress, setLoadProgress] = useState(0);
 
-            // 同期コード (ログイン不要・ブラウザ間共有)
-            const [syncCode, setSyncCode] = useState(getOrCreateSyncCode());
+            // Firebase保存用状態
             const [savedModels, setSavedModels] = useState([]);
             const [savedPresets, setSavedPresets] = useState([]);
             const [currentModelId, setCurrentModelId] = useState(null);
             const [currentZipFile, setCurrentZipFile] = useState(null);
 
-            // Firestoreパスヘルパー
-            const syncRef = () => fbDb.collection('sync').doc(syncCode);
-
             // 起動時にモデル一覧読み込み
-            useEffect(() => { loadSavedModels(); }, [syncCode]);
-
-            // 同期コード変更
-            const changeSyncCode = () => {
-                const input = prompt('同期コードを入力（別ブラウザと共有するコード）:', syncCode);
-                if (!input || input.length < 8) { if (input !== null) alert('8文字以上で入力してください'); return; }
-                localStorage.setItem('vtuber_sync_code', input);
-                setSyncCode(input);
-                setSavedModels([]);
-                setSavedPresets([]);
-                setCurrentModelId(null);
-            };
+            useEffect(() => { loadSavedModels(); }, []);
 
             // モデル一覧読み込み
             const loadSavedModels = async () => {
                 try {
-                    const snap = await syncRef().collection('models').orderBy('createdAt', 'desc').get();
+                    const snap = await fbDb.collection('models').orderBy('createdAt', 'desc').get();
                     setSavedModels(snap.docs.map(d => ({ id: d.id, ...d.data() })));
                 } catch (e) { console.error(e); }
             };
@@ -173,9 +143,9 @@
                 setLoading(true); setLoadingText('モデルを保存中...');
                 try {
                     const modelId = `model_${Date.now()}`;
-                    const storageRef = fbStorage.ref(`sync/${syncCode}/models/${modelId}.zip`);
+                    const storageRef = fbStorage.ref(`models/${modelId}.zip`);
                     await storageRef.put(currentZipFile);
-                    await syncRef().collection('models').doc(modelId).set({
+                    await fbDb.collection('models').doc(modelId).set({
                         name, createdAt: firebase.firestore.FieldValue.serverTimestamp(),
                         size: currentZipFile.size,
                     });
@@ -190,7 +160,7 @@
             const loadModelFromFirebase = async (modelId) => {
                 setLoading(true); setLoadingText('モデルをダウンロード中...');
                 try {
-                    const storageRef = fbStorage.ref(`sync/${syncCode}/models/${modelId}.zip`);
+                    const storageRef = fbStorage.ref(`models/${modelId}.zip`);
                     const url = await storageRef.getDownloadURL();
                     const res = await fetch(url);
                     const blob = await res.blob();
@@ -206,11 +176,11 @@
             const deleteModelFromFirebase = async (modelId) => {
                 if (!confirm('このモデルを削除しますか？')) return;
                 try {
-                    await fbStorage.ref(`sync/${syncCode}/models/${modelId}.zip`).delete();
-                    const presetsSnap = await syncRef().collection('models').doc(modelId).collection('presets').get();
+                    await fbStorage.ref(`models/${modelId}.zip`).delete();
+                    const presetsSnap = await fbDb.collection('models').doc(modelId).collection('presets').get();
                     const batch = fbDb.batch();
                     presetsSnap.docs.forEach(d => batch.delete(d.ref));
-                    batch.delete(syncRef().collection('models').doc(modelId));
+                    batch.delete(fbDb.collection('models').doc(modelId));
                     await batch.commit();
                     await loadSavedModels();
                     if (currentModelId === modelId) { setCurrentModelId(null); setSavedPresets([]); }
@@ -221,7 +191,7 @@
             // プリセット一覧読み込み
             const loadPresetsForModel = async (modelId) => {
                 try {
-                    const snap = await syncRef().collection('models').doc(modelId).collection('presets').orderBy('createdAt', 'desc').get();
+                    const snap = await fbDb.collection('models').doc(modelId).collection('presets').orderBy('createdAt', 'desc').get();
                     setSavedPresets(snap.docs.map(d => ({ id: d.id, ...d.data() })));
                 } catch (e) { console.error(e); setSavedPresets([]); }
             };
@@ -236,7 +206,7 @@
                 if (!name) return;
                 try {
                     const paramData = parameters.map(p => ({ id: p.id, value: p.value }));
-                    await syncRef().collection('models').doc(currentModelId).collection('presets').add({
+                    await fbDb.collection('models').doc(currentModelId).collection('presets').add({
                         name, params: paramData, createdAt: firebase.firestore.FieldValue.serverTimestamp(),
                     });
                     await loadPresetsForModel(currentModelId);
@@ -256,7 +226,7 @@
             const deletePreset = async (presetId) => {
                 if (!currentModelId || !confirm('このプリセットを削除しますか？')) return;
                 try {
-                    await syncRef().collection('models').doc(currentModelId).collection('presets').doc(presetId).delete();
+                    await fbDb.collection('models').doc(currentModelId).collection('presets').doc(presetId).delete();
                     await loadPresetsForModel(currentModelId);
                 } catch (e) { console.error(e); }
             };
@@ -869,18 +839,6 @@
                         </div>
 
                         <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3">
-                            {/* Sync Code */}
-                            <div className="p-2 bg-gray-50 rounded-lg flex items-center justify-between gap-1.5">
-                                <div className="flex items-center gap-1.5 min-w-0">
-                                    <Icons.Database className="w-3.5 h-3.5 text-gray-400 shrink-0"/>
-                                    <span className="text-[9px] text-gray-400 shrink-0">同期コード:</span>
-                                    <span className="text-[10px] font-bold text-indigo-600 font-mono truncate">{syncCode}</span>
-                                </div>
-                                <button onClick={changeSyncCode} className="text-[9px] text-indigo-500 hover:text-indigo-700 font-bold px-1.5 py-0.5 rounded hover:bg-indigo-50 transition-colors shrink-0">
-                                    変更
-                                </button>
-                            </div>
-
                             {/* Uploads */}
                             <div className="grid grid-cols-2 gap-2">
                                 <label className="flex flex-col items-center justify-center h-16 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:bg-indigo-50 transition-all">
