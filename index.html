@@ -128,7 +128,8 @@
             // Firebase保存用状態
             const [savedModels, setSavedModels] = useState([]);
             const [savedPresets, setSavedPresets] = useState([]);
-            const [currentModelId, setCurrentModelId] = useState(null);
+            const [currentModelId, _setCurrentModelId] = useState(() => localStorage.getItem('vtm_currentModelId') || null);
+            const setCurrentModelId = (id) => { _setCurrentModelId(id); if (id) localStorage.setItem('vtm_currentModelId', id); else localStorage.removeItem('vtm_currentModelId'); };
             const [currentZipFile, setCurrentZipFile] = useState(null);
 
             const [authReady, setAuthReady] = useState(false);
@@ -145,11 +146,19 @@
                 });
             }, []);
 
-            // モデル一覧読み込み
+            // モデル一覧読み込み（＋自動選択でプリセット復元）
             const loadSavedModels = async () => {
                 try {
                     const snap = await fbDb.collection('models').orderBy('createdAt', 'desc').get();
-                    setSavedModels(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+                    const models = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                    setSavedModels(models);
+                    // currentModelId がまだ無い or 該当モデルが存在しない → 最新モデルを自動選択
+                    const savedId = localStorage.getItem('vtm_currentModelId');
+                    const validId = models.find(m => m.id === savedId) ? savedId : (models.length > 0 ? models[0].id : null);
+                    if (validId) {
+                        setCurrentModelId(validId);
+                        await loadPresetsForModel(validId);
+                    }
                 } catch (e) { console.error(e); }
             };
 
