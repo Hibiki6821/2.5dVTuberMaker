@@ -235,6 +235,7 @@
                     await fbDb.collection('models').doc(modelId).set({
                         name, createdAt: firebase.firestore.FieldValue.serverTimestamp(),
                         size: currentZipFile.size,
+                        maskSettings: isMasked ? { enabled: true, y: maskSettings.y, radius: maskSettings.radius } : { enabled: false },
                     });
                     await loadSavedModels();
                     setCurrentModelId(modelId);
@@ -247,6 +248,21 @@
             const loadModelFromFirebase = async (modelId) => {
                 setLoading(true); setLoadingText('モデルをダウンロード中...');
                 try {
+                    // モデルのメタデータからマスク設定を復元
+                    const modelDoc = await fbDb.collection('models').doc(modelId).get();
+                    const modelData = modelDoc.data();
+                    if (modelData?.maskSettings) {
+                        const ms = modelData.maskSettings;
+                        if (ms.enabled) {
+                            setIsMasked(true);
+                            setMaskSettings({ y: ms.y, radius: ms.radius });
+                        } else {
+                            setIsMasked(false);
+                        }
+                    } else {
+                        setIsMasked(false);
+                    }
+
                     const storageRef = fbStorage.ref(`models/${modelId}.zip`);
                     const url = await storageRef.getDownloadURL();
                     const res = await fetch(url);
@@ -502,6 +518,21 @@
                     graphics.destroy();
                 }
             }, [isMasked, maskSettings, model]);
+
+            // マスク設定変更時にFirestoreへ自動保存
+            const maskSaveTimer = useRef(null);
+            useEffect(() => {
+                if (!currentModelId || !model) return;
+                // デバウンス: スライダー操作中に連続保存しないよう500ms遅延
+                clearTimeout(maskSaveTimer.current);
+                maskSaveTimer.current = setTimeout(() => {
+                    const data = isMasked
+                        ? { maskSettings: { enabled: true, y: maskSettings.y, radius: maskSettings.radius } }
+                        : { maskSettings: { enabled: false } };
+                    fbDb.collection('models').doc(currentModelId).update(data).catch(e => console.error('マスク設定保存失敗:', e));
+                }, 500);
+                return () => clearTimeout(maskSaveTimer.current);
+            }, [isMasked, maskSettings, currentModelId, model]);
 
             // -------------------------------------------------------------------------
             // ハンドラ関連
@@ -786,7 +817,7 @@
                     setModel(model);
                     
                     setTransform({ x: container.x, y: container.y, scale, rotation: 0 });
-                    
+
                     if (model.internalModel.settings.expressions) {
                         setExpressions(model.internalModel.settings.expressions.map(e => e.Name));
                     } else {
@@ -855,24 +886,39 @@
                             const w = pixiAppRef.current.renderer.screen.width;
                             const h = pixiAppRef.current.renderer.screen.height;
 
-                            // 鼻の位置 (FaceMeshは0-1正規化座標)
-                            const nose = landmarks[1];
-                            const noseX = nose.x * w;
-                            const noseY = nose.y * h;
+                            // ランドマーク取得 (FaceMeshは0-1正規化座標)
+                            const nose = landmarks[1];      // 鼻先
+                            const forehead = landmarks[10]; // おでこ上端
+                            const chin = landmarks[152];    // あご下端
+                            const lCheek = landmarks[454];  // 左頬外側
+                            const rCheek = landmarks[234];  // 右頬外側
+                            const lEye = landmarks[33];     // 左目外端
+                            const rEye = landmarks[263];    // 右目外端
+
+                            // ピクセル座標に変換
+                            const foreheadX = forehead.x * w;
+                            const foreheadY = forehead.y * h;
+                            const chinX = chin.x * w;
+                            const chinY = chin.y * h;
 
                             // 顔幅 (頬から頬)
-                            const lCheek = landmarks[454];
-                            const rCheek = landmarks[234];
                             const faceW = Math.hypot((lCheek.x - rCheek.x)*w, (lCheek.y - rCheek.y)*h);
-
                             // 顔の高さ (おでこ〜あご)
-                            const forehead = landmarks[10];
-                            const chin = landmarks[152];
                             const faceH = Math.hypot((forehead.x - chin.x)*w, (forehead.y - chin.y)*h);
 
+                            // 頭全体の推定（髪の毛含む）
+                            // 頭頂は おでこ位置からさらに顔高さの30%上
+                            const headTopY = foreheadY - faceH * 0.3;
+                            // 頭全体の高さ（頭頂～あご）
+                            const headH = chinY - headTopY;
+                            // 頭幅（髪含む）≒ 顔幅の1.4倍
+                            const headW = faceW * 1.4;
+
+                            // 頭の中心（頭頂～あごの中点）
+                            const headCenterX = (foreheadX + chinX) / 2;
+                            const headCenterY = (headTopY + chinY) / 2;
+
                             // 角度
-                            const lEye = landmarks[33];
-                            const rEye = landmarks[263];
                             const dx = (rEye.x - lEye.x) * w;
                             const dy = (rEye.y - lEye.y) * h;
                             const angle = Math.atan2(dy, dx) * (180/Math.PI);
@@ -880,25 +926,47 @@
                             // モデルサイズ計算
                             const modelW = modelRef.current.internalModel.width;
                             const modelH = modelRef.current.internalModel.height;
-                            // モデルの顔幅はモデル全体の約25%と仮定（大きめに合わせる）
-                            const estimatedModelFaceW = modelW * 0.25;
-                            const scale = faceW / estimatedModelFaceW;
 
-                            // モデルのanchor=(0.5,0.5)なのでcontainer位置=モデル中心
-                            // 顔はモデル中心より上にあるため、鼻位置から下にオフセットして
-                            // モデルの顔部分が写真の顔に合うようにする
-                            const faceOffsetY = modelH * 0.25 * scale;
-                            const cx = noseX;
-                            const cy = noseY + faceOffsetY;
+                            // Live2Dモデルの顔領域推定
+                            // モデルの顔幅 ≒ モデル全幅の35%（頭全体の幅に合わせるため少し小さく見積もる）
+                            const estimatedModelFaceW = modelW * 0.35;
+                            // 頭全体の幅に合わせてスケール
+                            const scale = headW / estimatedModelFaceW;
+
+                            // モデルの顔中心位置（モデル座標系）
+                            // Live2Dモデルは anchor(0.5,0.5) → モデル中心が原点
+                            // 顔中心はモデル上端から約25%の位置 → モデル中心から -(0.5-0.25)*mH = -0.25*mH
+                            const modelFaceCenterLocalY = -modelH * 0.20;
+
+                            // 写真の頭中心にモデルの顔中心を合わせる（回転を考慮）
+                            // PixiJSでローカル(0, offsetY)を回転θで変換すると:
+                            //   screen_x = cx - offsetY * sin(θ)
+                            //   screen_y = cy + offsetY * cos(θ)
+                            // これが headCenter に来るように逆算
+                            const angleRad = angle * Math.PI / 180;
+                            const offsetY = modelFaceCenterLocalY * scale;
+                            const cx = headCenterX + offsetY * Math.sin(angleRad);
+                            const cy = headCenterY - offsetY * Math.cos(angleRad);
 
                             // 適用
                             setTransform({ x: cx, y: cy, scale, rotation: angle });
 
-                            // マスクも自動設定 (顔全体が収まるよう大きめに)
-                            const modelFaceCenterY = -(modelH * 0.25);
-                            const maskRadius = (faceH / scale) * 1.3;
-                            setMaskSettings({ y: modelFaceCenterY, radius: maskRadius });
-                            setIsMasked(true);
+                            // マスク設定: 保存済みがあればそれを使う、なければ自動計算
+                            let useSavedMask = false;
+                            if (currentModelId) {
+                                const m = savedModels.find(m => m.id === currentModelId);
+                                if (m?.maskSettings?.enabled) {
+                                    setMaskSettings({ y: m.maskSettings.y, radius: m.maskSettings.radius });
+                                    setIsMasked(true);
+                                    useSavedMask = true;
+                                }
+                            }
+                            if (!useSavedMask) {
+                                const maskCenterY = modelFaceCenterLocalY;
+                                const maskRadius = (headH / scale) * 0.55;
+                                setMaskSettings({ y: maskCenterY, radius: maskRadius });
+                                setIsMasked(true);
+                            }
 
                             alert('顔発見！位置合わせたよ！');
                         } else {
