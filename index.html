@@ -186,6 +186,12 @@
             const [currentZipFile, setCurrentZipFile] = useState(null);
             const [isDragging, setIsDragging] = useState(false);
 
+            // バッチ画像モード
+            const [batchMode, setBatchMode] = useState(false);
+            const [batchImages, setBatchImages] = useState([]); // [{url, name, thumbnailUrl, transform, allParameters, parameters, canvasSize, faceDetected}]
+            const [currentImageIdx, setCurrentImageIdx] = useState(-1);
+            const [selectedImageIdxs, setSelectedImageIdxs] = useState(new Set());
+
             const [authReady, setAuthReady] = useState(false);
 
             // 起動時に匿名ログイン完了を待ってからモデル一覧読み込み
@@ -321,8 +327,17 @@
             const applyPreset = (preset) => {
                 const paramMap = {};
                 preset.params.forEach(p => { paramMap[p.id] = p.value; });
-                setParameters(prev => prev.map(p => paramMap[p.id] !== undefined ? { ...p, value: paramMap[p.id] } : p));
-                setAllParameters(prev => prev.map(p => paramMap[p.id] !== undefined ? { ...p, value: paramMap[p.id] } : p));
+                const applyToParams = (params) => params.map(p => paramMap[p.id] !== undefined ? { ...p, value: paramMap[p.id] } : p);
+                setParameters(prev => applyToParams(prev));
+                setAllParameters(prev => applyToParams(prev));
+
+                // バッチ: 選択中の画像にも一括適用
+                if (batchMode && selectedImageIdxs.size > 0) {
+                    setBatchImages(prev => prev.map((img, i) => {
+                        if (!selectedImageIdxs.has(i) && i !== currentImageIdx) return img;
+                        return { ...img, parameters: applyToParams(img.parameters), allParameters: applyToParams(img.allParameters) };
+                    }));
+                }
             };
 
             // プリセット削除
@@ -379,6 +394,18 @@
             // Ref for Ticker (全パラメータを強制適用して呼吸等を止める)
             const allParametersRef = useRef([]);
             useEffect(() => { allParametersRef.current = allParameters; }, [allParameters]);
+
+            // モデル読み込み後、バッチ画像のパラメータが空なら現在のモデルのデフォルト値で埋める
+            useEffect(() => {
+                if (!batchMode || batchImages.length === 0 || allParameters.length === 0) return;
+                const needsUpdate = batchImages.some(img => img.allParameters.length === 0);
+                if (!needsUpdate) return;
+                const defaultAll = allParameters.map(p => ({ ...p, value: p.default }));
+                const defaultFace = defaultAll.filter(p => isFaceParam(p.id));
+                setBatchImages(prev => prev.map(img =>
+                    img.allParameters.length === 0 ? { ...img, allParameters: defaultAll, parameters: defaultFace } : img
+                ));
+            }, [allParameters, batchMode, batchImages.length]);
 
             // -------------------------------------------------------------------------
             // ライブラリの読み込み
@@ -584,13 +611,159 @@
 
             const handleImageUpload = (e) => handleImageFile(e.target.files[0]);
 
+            // ユーティリティ
+            const getImageDimensions = (url) => new Promise((resolve, reject) => {
+                const img = new Image();
+                img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+                img.onerror = () => reject(new Error('画像読み込み失敗'));
+                img.src = url;
+            });
+            const computeCanvasSize = (imgW, imgH) => {
+                const maxW = 800, maxH = 600;
+                let w = imgW, h = imgH;
+                if (w > maxW || h > maxH) { const r = Math.min(maxW / w, maxH / h); w = Math.round(w * r); h = Math.round(h * r); }
+                return { w, h };
+            };
+            const generateThumbnail = (url, maxDim) => new Promise((resolve) => {
+                const img = new Image();
+                img.onload = () => {
+                    const c = document.createElement('canvas');
+                    const r = Math.min(maxDim / img.naturalWidth, maxDim / img.naturalHeight);
+                    c.width = Math.round(img.naturalWidth * r); c.height = Math.round(img.naturalHeight * r);
+                    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+                    resolve(c.toDataURL('image/jpeg', 0.7));
+                };
+                img.onerror = () => resolve(null);
+                img.src = url;
+            });
+
+            // バッチ: 現在の画像の状態をbatchImagesに保存（container実値から取得）
+            const saveCurrentImageState = () => {
+                if (currentImageIdx < 0 || batchImages.length === 0) return;
+                const c = modelContainerRef.current;
+                const currentTransform = c ? { x: c.x, y: c.y, scale: c.scale.x, rotation: c.rotation * (180 / Math.PI) } : transform;
+                const currentAllParams = allParametersRef.current.length > 0 ? allParametersRef.current : allParameters;
+                const currentParams = currentAllParams.filter(p => isFaceParam(p.id));
+                setBatchImages(prev => prev.map((img, i) =>
+                    i === currentImageIdx ? { ...img, transform: currentTransform, allParameters: currentAllParams, parameters: currentParams } : img
+                ));
+            };
+
+            // バッチ: 画像切り替え
+            const switchToImage = (idx, imageList) => {
+                const imgs = imageList || batchImages;
+                if (idx < 0 || idx >= imgs.length) return;
+                const img = imgs[idx];
+                setCurrentImageIdx(idx);
+
+                const app = pixiAppRef.current;
+                if (!app) return;
+
+                // 背景差し替え
+                if (bgSpriteRef.current) {
+                    app.stage.removeChild(bgSpriteRef.current);
+                    bgSpriteRef.current.destroy({ texture: true, baseTexture: true });
+                    bgSpriteRef.current = null;
+                }
+                app.renderer.resize(img.canvasSize.w, img.canvasSize.h);
+                const stage = app.stage;
+                stage.hitArea = new window.PIXI.Rectangle(0, 0, img.canvasSize.w, img.canvasSize.h);
+
+                const bg = window.PIXI.Sprite.from(img.url);
+                bg.width = img.canvasSize.w; bg.height = img.canvasSize.h;
+                bg.zIndex = -1;
+                app.stage.addChildAt(bg, 0);
+                bgSpriteRef.current = bg;
+
+                // 状態復元
+                setBgImage(img.url);
+                setTransform(img.transform);
+                // パラメータが空の場合は現在のモデルのパラメータを維持
+                if (img.allParameters.length > 0) {
+                    setAllParameters(img.allParameters);
+                    setParameters(img.parameters);
+                }
+            };
+
+            // バッチ選択ヘルパー
+            const toggleImageSelection = (idx) => {
+                setSelectedImageIdxs(prev => { const n = new Set(prev); if (n.has(idx)) n.delete(idx); else n.add(idx); return n; });
+            };
+            const selectAllImages = () => setSelectedImageIdxs(new Set(batchImages.map((_, i) => i)));
+            const deselectAllImages = () => setSelectedImageIdxs(new Set());
+
             // ZIPアップロード (Data URI + 自動解析)
             const handleZipFile = async (file) => {
                 if (!file || !window.JSZip) return;
-                setCurrentZipFile(file);
-                setCurrentModelId(null);
-                setSavedPresets([]);
-                await processZipFile(file);
+                const jsZip = new window.JSZip();
+                const zip = await jsZip.loadAsync(file);
+                const filePaths = Object.keys(zip.files);
+                const hasModel = filePaths.some(p => p.toLowerCase().endsWith('.model3.json'));
+                const imageExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'];
+                const imageFiles = filePaths.filter(p => {
+                    if (zip.files[p].dir) return false;
+                    const lower = p.toLowerCase();
+                    // __MACOSX や隠しファイルを除外
+                    if (lower.includes('__macosx') || lower.includes('/.') || lower.startsWith('.')) return false;
+                    return imageExtensions.some(ext => lower.endsWith(ext));
+                });
+
+                if (hasModel) {
+                    // モデルZIP（既存処理）
+                    setCurrentZipFile(file);
+                    setCurrentModelId(null);
+                    setSavedPresets([]);
+                    await processZipFile(file);
+                } else if (imageFiles.length > 0) {
+                    // 画像バッチモード
+                    await processImageZip(zip, imageFiles);
+                } else {
+                    setErrorMsg('ZIPにモデルも画像も見つかりません。');
+                }
+            };
+
+            // 画像ZIPの処理
+            const processImageZip = async (zip, imageFiles) => {
+                setLoading(true);
+                setBatchMode(true);
+                imageFiles.sort();
+
+                const newImages = [];
+                for (let i = 0; i < imageFiles.length; i++) {
+                    setLoadingText(`画像を読み込み中... (${i + 1}/${imageFiles.length})`);
+                    const path = imageFiles[i];
+                    try {
+                        const ext = path.toLowerCase().split('.').pop();
+                        const mime = ext === 'png' ? 'image/png' : ext === 'gif' ? 'image/gif' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+                        const base64 = await zip.files[path].async('base64');
+                        const url = `data:${mime};base64,${base64}`;
+                        const dims = await getImageDimensions(url);
+                        const cs = computeCanvasSize(dims.width, dims.height);
+                        const thumbnailUrl = await generateThumbnail(url, 120);
+
+                        // allParametersRef は常に最新値を持つ
+                        const srcParams = allParametersRef.current.length > 0 ? allParametersRef.current : allParameters;
+                        const defaultAllParams = srcParams.map(p => ({ ...p, value: p.default }));
+                        const defaultParams = defaultAllParams.filter(p => isFaceParam(p.id));
+
+                        newImages.push({
+                            url, name: path.split('/').pop(), thumbnailUrl,
+                            transform: { x: cs.w / 2, y: cs.h / 2, scale: 0.1, rotation: 0 },
+                            allParameters: defaultAllParams, parameters: defaultParams,
+                            canvasSize: cs, faceDetected: false,
+                        });
+                    } catch (e) {
+                        console.warn('画像スキップ:', path, e);
+                    }
+                }
+
+                setBatchImages(newImages);
+                setSelectedImageIdxs(new Set());
+                if (newImages.length > 0) {
+                    setCurrentImageIdx(0);
+                    switchToImage(0, newImages);
+                }
+                setLoading(false);
             };
 
             const handleZipUpload = (e) => handleZipFile(e.target.files[0]);
@@ -837,6 +1010,17 @@
                 const v = parseFloat(val);
                 setParameters(prev => prev.map(p => p.id === id ? { ...p, value: v } : p));
                 setAllParameters(prev => prev.map(p => p.id === id ? { ...p, value: v } : p));
+
+                // バッチ: 選択中の画像にも一括適用
+                if (batchMode && selectedImageIdxs.size > 0) {
+                    setBatchImages(prev => prev.map((img, i) => {
+                        if (!selectedImageIdxs.has(i) && i !== currentImageIdx) return img;
+                        return { ...img,
+                            parameters: img.parameters.map(p => p.id === id ? { ...p, value: v } : p),
+                            allParameters: img.allParameters.map(p => p.id === id ? { ...p, value: v } : p),
+                        };
+                    }));
+                }
             };
 
             const handleParamReset = (id) => {
@@ -871,118 +1055,145 @@
                 }
             };
 
-            // Face Detection
+            // Face Detection - 共通ロジック（1枚分）
+            const calcFaceTransform = (landmarks, w, h) => {
+                const forehead = landmarks[10], chin = landmarks[152];
+                const lCheek = landmarks[454], rCheek = landmarks[234];
+                const lEye = landmarks[33], rEye = landmarks[263];
+
+                const foreheadX = forehead.x * w, foreheadY = forehead.y * h;
+                const chinX = chin.x * w, chinY = chin.y * h;
+                const faceW = Math.hypot((lCheek.x - rCheek.x)*w, (lCheek.y - rCheek.y)*h);
+                const faceH = Math.hypot((forehead.x - chin.x)*w, (forehead.y - chin.y)*h);
+
+                const headTopY = foreheadY - faceH * 0.3;
+                const headH = chinY - headTopY;
+                const headW = faceW * 1.4;
+                const headCenterX = (foreheadX + chinX) / 2;
+                const headCenterY = (headTopY + chinY) / 2;
+
+                const dx = (rEye.x - lEye.x) * w;
+                const dy = (rEye.y - lEye.y) * h;
+                const angle = Math.atan2(dy, dx) * (180/Math.PI);
+
+                const modelW = modelRef.current.internalModel.width;
+                const modelH = modelRef.current.internalModel.height;
+                const estimatedModelFaceW = modelW * 0.35;
+                const scale = headW / estimatedModelFaceW;
+                const modelFaceCenterLocalY = -modelH * 0.20;
+                const angleRad = angle * Math.PI / 180;
+                const offsetY = modelFaceCenterLocalY * scale;
+                const cx = headCenterX + offsetY * Math.sin(angleRad);
+                const cy = headCenterY - offsetY * Math.cos(angleRad);
+
+                return { transform: { x: cx, y: cy, scale, rotation: angle }, headH, scale, modelFaceCenterLocalY };
+            };
+
+            // 1枚の画像に対してFaceMeshを実行
+            const detectFaceInImage = (faceMesh, imageUrl, canvasSize) => {
+                return new Promise((resolve) => {
+                    faceMesh.onResults((results) => {
+                        if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+                            resolve(calcFaceTransform(results.multiFaceLandmarks[0], canvasSize.w, canvasSize.h));
+                        } else {
+                            resolve(null);
+                        }
+                    });
+                    const img = new Image();
+                    img.crossOrigin = "Anonymous";
+                    img.onload = () => faceMesh.send({ image: img });
+                    img.src = imageUrl;
+                });
+            };
+
+            // 単体AI顔検出
             const detectFaceAndAlign = async () => {
                 if(!bgImage || !modelRef.current) { alert('画像とモデルを読み込んでね！'); return; }
-                if(!window.FaceMesh) { alert('顔検出ライブラリが読み込まれていません。リロードしてください。'); return; }
+                if(!window.FaceMesh) { alert('顔検出ライブラリが読み込まれていません。'); return; }
                 setLoading(true); setLoadingText('顔を探してるよ...');
                 try {
                     const faceMesh = new window.FaceMesh({locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}`});
                     faceMesh.setOptions({maxNumFaces: 1, refineLandmarks: true});
-                    faceMesh.onResults(results => {
-                        if(results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
-                            const landmarks = results.multiFaceLandmarks[0];
-                            // 論理ピクセル(ステージ座標系)を使う
-                            const w = pixiAppRef.current.renderer.screen.width;
-                            const h = pixiAppRef.current.renderer.screen.height;
+                    const w = pixiAppRef.current.renderer.screen.width;
+                    const h = pixiAppRef.current.renderer.screen.height;
+                    const result = await detectFaceInImage(faceMesh, bgImage, { w, h });
 
-                            // ランドマーク取得 (FaceMeshは0-1正規化座標)
-                            const nose = landmarks[1];      // 鼻先
-                            const forehead = landmarks[10]; // おでこ上端
-                            const chin = landmarks[152];    // あご下端
-                            const lCheek = landmarks[454];  // 左頬外側
-                            const rCheek = landmarks[234];  // 右頬外側
-                            const lEye = landmarks[33];     // 左目外端
-                            const rEye = landmarks[263];    // 右目外端
+                    if (result) {
+                        setTransform(result.transform);
 
-                            // ピクセル座標に変換
-                            const foreheadX = forehead.x * w;
-                            const foreheadY = forehead.y * h;
-                            const chinX = chin.x * w;
-                            const chinY = chin.y * h;
-
-                            // 顔幅 (頬から頬)
-                            const faceW = Math.hypot((lCheek.x - rCheek.x)*w, (lCheek.y - rCheek.y)*h);
-                            // 顔の高さ (おでこ〜あご)
-                            const faceH = Math.hypot((forehead.x - chin.x)*w, (forehead.y - chin.y)*h);
-
-                            // 頭全体の推定（髪の毛含む）
-                            // 頭頂は おでこ位置からさらに顔高さの30%上
-                            const headTopY = foreheadY - faceH * 0.3;
-                            // 頭全体の高さ（頭頂～あご）
-                            const headH = chinY - headTopY;
-                            // 頭幅（髪含む）≒ 顔幅の1.4倍
-                            const headW = faceW * 1.4;
-
-                            // 頭の中心（頭頂～あごの中点）
-                            const headCenterX = (foreheadX + chinX) / 2;
-                            const headCenterY = (headTopY + chinY) / 2;
-
-                            // 角度
-                            const dx = (rEye.x - lEye.x) * w;
-                            const dy = (rEye.y - lEye.y) * h;
-                            const angle = Math.atan2(dy, dx) * (180/Math.PI);
-
-                            // モデルサイズ計算
-                            const modelW = modelRef.current.internalModel.width;
-                            const modelH = modelRef.current.internalModel.height;
-
-                            // Live2Dモデルの顔領域推定
-                            // モデルの顔幅 ≒ モデル全幅の35%（頭全体の幅に合わせるため少し小さく見積もる）
-                            const estimatedModelFaceW = modelW * 0.35;
-                            // 頭全体の幅に合わせてスケール
-                            const scale = headW / estimatedModelFaceW;
-
-                            // モデルの顔中心位置（モデル座標系）
-                            // Live2Dモデルは anchor(0.5,0.5) → モデル中心が原点
-                            // 顔中心はモデル上端から約25%の位置 → モデル中心から -(0.5-0.25)*mH = -0.25*mH
-                            const modelFaceCenterLocalY = -modelH * 0.20;
-
-                            // 写真の頭中心にモデルの顔中心を合わせる（回転を考慮）
-                            // PixiJSでローカル(0, offsetY)を回転θで変換すると:
-                            //   screen_x = cx - offsetY * sin(θ)
-                            //   screen_y = cy + offsetY * cos(θ)
-                            // これが headCenter に来るように逆算
-                            const angleRad = angle * Math.PI / 180;
-                            const offsetY = modelFaceCenterLocalY * scale;
-                            const cx = headCenterX + offsetY * Math.sin(angleRad);
-                            const cy = headCenterY - offsetY * Math.cos(angleRad);
-
-                            // 適用
-                            setTransform({ x: cx, y: cy, scale, rotation: angle });
-
-                            // マスク設定: 保存済みがあればそれを使う、なければ自動計算
-                            let useSavedMask = false;
-                            if (currentModelId) {
-                                const m = savedModels.find(m => m.id === currentModelId);
-                                if (m?.maskSettings?.enabled) {
-                                    setMaskSettings({ y: m.maskSettings.y, radius: m.maskSettings.radius });
-                                    setIsMasked(true);
-                                    useSavedMask = true;
-                                }
-                            }
-                            if (!useSavedMask) {
-                                const maskCenterY = modelFaceCenterLocalY;
-                                const maskRadius = (headH / scale) * 0.55;
-                                setMaskSettings({ y: maskCenterY, radius: maskRadius });
+                        // マスク設定
+                        let useSavedMask = false;
+                        if (currentModelId) {
+                            const m = savedModels.find(m => m.id === currentModelId);
+                            if (m?.maskSettings?.enabled) {
+                                setMaskSettings({ y: m.maskSettings.y, radius: m.maskSettings.radius });
                                 setIsMasked(true);
+                                useSavedMask = true;
                             }
-
-                            alert('顔発見！位置合わせたよ！');
-                        } else {
-                            alert('顔が見つからなかった...');
                         }
-                        setLoading(false);
-                    });
-                    const img = new Image();
-                    img.src = bgImage;
-                    img.crossOrigin = "Anonymous";
-                    img.onload = async () => { await faceMesh.send({image: img}); };
-                } catch(e) {
-                    console.error(e);
-                    alert('エラー: ' + e.message);
+                        if (!useSavedMask) {
+                            setMaskSettings({ y: result.modelFaceCenterLocalY, radius: (result.headH / result.scale) * 0.55 });
+                            setIsMasked(true);
+                        }
+
+                        // バッチモード時は現在の画像にも反映
+                        if (batchMode && currentImageIdx >= 0) {
+                            setBatchImages(prev => prev.map((img, i) =>
+                                i === currentImageIdx ? { ...img, transform: result.transform, faceDetected: true } : img
+                            ));
+                        }
+                        alert('顔発見！位置合わせたよ！');
+                    } else {
+                        alert('顔が見つからなかった...');
+                    }
                     setLoading(false);
+                } catch(e) {
+                    console.error(e); alert('エラー: ' + e.message); setLoading(false);
                 }
+            };
+
+            // 全画像一括AI顔検出
+            const batchDetectFaces = async () => {
+                if (!modelRef.current || batchImages.length === 0) return;
+                if (!window.FaceMesh) { alert('顔検出ライブラリが読み込まれていません。'); return; }
+
+                saveCurrentImageState();
+                setLoading(true);
+
+                const faceMesh = new window.FaceMesh({locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}`});
+                faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true });
+
+                const updated = [...batchImages];
+                let detected = 0;
+
+                for (let i = 0; i < batchImages.length; i++) {
+                    setLoadingText(`顔検出中... (${i + 1}/${batchImages.length})`);
+                    const img = batchImages[i];
+                    const result = await detectFaceInImage(faceMesh, img.url, img.canvasSize);
+                    if (result) {
+                        updated[i] = { ...updated[i], transform: result.transform, faceDetected: true };
+                        detected++;
+                    }
+                    await new Promise(r => setTimeout(r, 50));
+                }
+
+                setBatchImages(updated);
+
+                // 現在表示中の画像のtransformを更新
+                const cur = updated[currentImageIdx];
+                if (cur?.faceDetected) setTransform(cur.transform);
+
+                // マスク設定（保存済みがあれば使う）
+                if (currentModelId) {
+                    const m = savedModels.find(m => m.id === currentModelId);
+                    if (m?.maskSettings?.enabled) {
+                        setMaskSettings({ y: m.maskSettings.y, radius: m.maskSettings.radius });
+                        setIsMasked(true);
+                    }
+                }
+
+                setLoading(false);
+                alert(`顔検出完了！ ${detected}/${batchImages.length}枚で顔を検出しました。`);
             };
 
             const handleDownload = () => {
@@ -994,6 +1205,71 @@
                 a.href = pixiAppRef.current.view.toDataURL('image/png');
                 a.click();
                 if (debugRingRef.current) debugRingRef.current.visible = true;
+            };
+
+            // 全画像一括ダウンロード
+            const handleBatchDownload = async () => {
+                if (!modelRef.current || batchImages.length === 0) return;
+                saveCurrentImageState();
+                setLoading(true);
+
+                const app = pixiAppRef.current;
+                const jsZip = new window.JSZip();
+                if (debugRingRef.current) debugRingRef.current.visible = false;
+
+                const savedImgs = [...batchImages];
+                // 最新のstateを反映
+                if (currentImageIdx >= 0) {
+                    savedImgs[currentImageIdx] = { ...savedImgs[currentImageIdx], transform, allParameters, parameters };
+                }
+
+                for (let i = 0; i < savedImgs.length; i++) {
+                    setLoadingText(`画像を書き出し中... (${i + 1}/${savedImgs.length})`);
+                    const img = savedImgs[i];
+
+                    // 背景差し替え
+                    if (bgSpriteRef.current) {
+                        app.stage.removeChild(bgSpriteRef.current);
+                        bgSpriteRef.current.destroy({ texture: true, baseTexture: true });
+                    }
+                    app.renderer.resize(img.canvasSize.w, img.canvasSize.h);
+                    const bg = window.PIXI.Sprite.from(img.url);
+                    bg.width = img.canvasSize.w; bg.height = img.canvasSize.h;
+                    bg.zIndex = -1;
+                    app.stage.addChildAt(bg, 0);
+                    bgSpriteRef.current = bg;
+
+                    // transform適用
+                    if (modelContainerRef.current) {
+                        const c = modelContainerRef.current;
+                        c.position.set(img.transform.x, img.transform.y);
+                        c.scale.set(img.transform.scale);
+                        c.rotation = img.transform.rotation * (Math.PI / 180);
+                    }
+                    // パラメータ適用
+                    allParametersRef.current = img.allParameters;
+
+                    await new Promise(r => setTimeout(r, 100));
+                    app.renderer.render(app.stage);
+                    const dataUrl = app.view.toDataURL('image/png');
+                    const base64Data = dataUrl.split(',')[1];
+                    const padIdx = String(i + 1).padStart(3, '0');
+                    const baseName = img.name.replace(/\.[^.]+$/, '');
+                    jsZip.file(`${padIdx}_${baseName}.png`, base64Data, { base64: true });
+                }
+
+                // 元の画像に戻す
+                switchToImage(currentImageIdx, savedImgs);
+                if (debugRingRef.current) debugRingRef.current.visible = true;
+
+                setLoadingText('ZIPを生成中...');
+                const blob = await jsZip.generateAsync({ type: 'blob' });
+                const a = document.createElement('a');
+                a.download = `vtuber_batch_${Date.now()}.zip`;
+                a.href = URL.createObjectURL(blob);
+                a.click();
+                URL.revokeObjectURL(a.href);
+                setLoading(false);
             };
 
             if (!libsLoaded) {
@@ -1090,11 +1366,25 @@
                             {errorMsg && <div className="p-2 bg-red-50 text-red-600 text-[10px] rounded-lg flex gap-1"><Icons.AlertCircle className="w-3 h-3 shrink-0 mt-0.5"/>{errorMsg}</div>}
 
                             {/* Auto Align */}
-                            <button onClick={detectFaceAndAlign} disabled={!bgImage || !model || loading}
-                                className={`w-full py-2 rounded-lg flex items-center justify-center gap-2 font-bold text-xs shadow-sm transition-all ${!bgImage || !model ? 'bg-gray-100 text-gray-400' : 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white hover:shadow-md'}`}>
-                                <Icons.RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`}/>
-                                AI 顔検出＆自動配置
-                            </button>
+                            <div className="space-y-1.5">
+                                <button onClick={detectFaceAndAlign} disabled={!bgImage || !model || loading}
+                                    className={`w-full py-2 rounded-lg flex items-center justify-center gap-2 font-bold text-xs shadow-sm transition-all ${!bgImage || !model ? 'bg-gray-100 text-gray-400' : 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white hover:shadow-md'}`}>
+                                    <Icons.RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`}/>
+                                    AI 顔検出{batchMode ? ' (現在の画像)' : '＆自動配置'}
+                                </button>
+                                {batchMode && (
+                                    <button onClick={batchDetectFaces} disabled={!model || loading || batchImages.length === 0}
+                                        className="w-full py-2 rounded-lg flex items-center justify-center gap-2 font-bold text-xs shadow-sm transition-all bg-gradient-to-r from-purple-500 to-pink-600 text-white hover:shadow-md disabled:opacity-50">
+                                        <Icons.Target className="w-3 h-3"/>
+                                        全画像AI検出 ({batchImages.length}枚)
+                                    </button>
+                                )}
+                                {batchMode && selectedImageIdxs.size > 0 && (
+                                    <p className="text-[9px] text-pink-500 font-bold text-center">
+                                        {selectedImageIdxs.size}枚選択中 - 表情変更は一括適用されます
+                                    </p>
+                                )}
+                            </div>
 
                             {/* Controls */}
                             {model && (
@@ -1105,7 +1395,7 @@
                                         <div className="space-y-1">
                                             <div className="flex items-center gap-2">
                                                 <label className="text-[10px] text-gray-400 w-8 shrink-0">サイズ</label>
-                                                <input type="range" min="0.01" max="1.0" step="0.005" value={transform.scale} onChange={(e)=>setTransform({...transform, scale: Number(e.target.value)})} className="range-slider flex-1"/>
+                                                <input type="range" min="0" max="0.40" step="0.002" value={transform.scale} onChange={(e)=>setTransform({...transform, scale: Number(e.target.value)})} className="range-slider flex-1"/>
                                                 <span className="text-[10px] text-gray-400 w-8 text-right">{transform.scale.toFixed(2)}</span>
                                             </div>
                                             <div className="flex items-center gap-2">
@@ -1190,40 +1480,105 @@
                                 </div>
                             )}
 
-                            <button onClick={handleDownload} disabled={!model} className="w-full py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2 disabled:opacity-50">
-                                <Icons.Download className="w-4 h-4"/> 画像保存
-                            </button>
+                            {batchMode ? (
+                                <div className="grid grid-cols-2 gap-1.5">
+                                    <button onClick={handleDownload} disabled={!model || !bgImage}
+                                        className="py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg font-bold text-[10px] shadow-md transition-all flex items-center justify-center gap-1 disabled:opacity-50">
+                                        <Icons.Download className="w-3 h-3"/> 現在の画像
+                                    </button>
+                                    <button onClick={handleBatchDownload} disabled={!model || batchImages.length === 0 || loading}
+                                        className="py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold text-[10px] shadow-md transition-all flex items-center justify-center gap-1 disabled:opacity-50">
+                                        <Icons.Download className="w-3 h-3"/> 全画像ZIP
+                                    </button>
+                                </div>
+                            ) : (
+                                <button onClick={handleDownload} disabled={!model} className="w-full py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2 disabled:opacity-50">
+                                    <Icons.Download className="w-4 h-4"/> 画像保存
+                                </button>
+                            )}
                         </div>
                     </div>
 
-                    {/* Canvas */}
-                    <div className="flex-1 bg-gray-200 flex items-center justify-center p-8 relative overflow-hidden"
+                    {/* Canvas Area */}
+                    <div className="flex-1 flex flex-col bg-gray-200 overflow-hidden"
                         onDragEnter={handleDragEnter} onDragLeave={handleDragLeave} onDragOver={handleDragOver} onDrop={handleDrop}>
-                        <div ref={canvasRef} className="shadow-2xl bg-white border-4 border-white rounded-sm relative z-0"></div>
-                        
-                        {/* Loading Overlay */}
-                        {loading && (
-                            <div className="absolute inset-0 bg-black/50 backdrop-blur-sm z-50 flex flex-col items-center justify-center text-white">
-                                <div className="w-12 h-12 border-4 border-white border-t-transparent rounded-full animate-spin mb-4"></div>
-                                <p className="font-bold">{loadingText}</p>
-                            </div>
-                        )}
 
-                        {/* Empty State */}
-                        {!bgImage && !loading && !isDragging && (
-                            <div className="absolute pointer-events-none text-gray-400 flex flex-col items-center">
-                                <Icons.ImageIcon className="w-16 h-16 opacity-20 mb-2"/>
-                                <p>写真をアップロードしてね！</p>
-                                <p className="text-xs mt-1 opacity-60">ドラッグ&ドロップもOK</p>
-                            </div>
-                        )}
+                        {/* Canvas */}
+                        <div className="flex-1 flex items-center justify-center p-4 relative overflow-hidden">
+                            <div ref={canvasRef} className="shadow-2xl bg-white border-4 border-white rounded-sm relative z-0"></div>
 
-                        {/* Drag Overlay */}
-                        {isDragging && (
-                            <div className="absolute inset-0 bg-indigo-500/20 backdrop-blur-sm z-50 flex flex-col items-center justify-center border-4 border-dashed border-indigo-400 rounded-lg pointer-events-none">
-                                <Icons.Upload className="w-16 h-16 text-indigo-500 mb-3 animate-bounce"/>
-                                <p className="text-indigo-700 font-bold text-lg">ここにドロップ！</p>
-                                <p className="text-indigo-500 text-sm mt-1">画像 or モデル(ZIP)</p>
+                            {/* Loading Overlay */}
+                            {loading && (
+                                <div className="absolute inset-0 bg-black/50 backdrop-blur-sm z-50 flex flex-col items-center justify-center text-white">
+                                    <div className="w-12 h-12 border-4 border-white border-t-transparent rounded-full animate-spin mb-4"></div>
+                                    <p className="font-bold">{loadingText}</p>
+                                </div>
+                            )}
+
+                            {/* Empty State */}
+                            {!bgImage && !loading && !isDragging && (
+                                <div className="absolute pointer-events-none text-gray-400 flex flex-col items-center">
+                                    <Icons.ImageIcon className="w-16 h-16 opacity-20 mb-2"/>
+                                    <p>写真をアップロードしてね！</p>
+                                    <p className="text-xs mt-1 opacity-60">ドラッグ&ドロップもOK</p>
+                                </div>
+                            )}
+
+                            {/* Drag Overlay */}
+                            {isDragging && (
+                                <div className="absolute inset-0 bg-indigo-500/20 backdrop-blur-sm z-50 flex flex-col items-center justify-center border-4 border-dashed border-indigo-400 rounded-lg pointer-events-none">
+                                    <Icons.Upload className="w-16 h-16 text-indigo-500 mb-3 animate-bounce"/>
+                                    <p className="text-indigo-700 font-bold text-lg">ここにドロップ！</p>
+                                    <p className="text-indigo-500 text-sm mt-1">画像 or モデル(ZIP)</p>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Batch Preview Panel */}
+                        {batchMode && batchImages.length > 0 && (
+                            <div className="bg-white border-t border-gray-300 px-3 py-2 flex items-center gap-2 shrink-0" style={{height: '110px'}}>
+                                {/* 選択コントロール */}
+                                <div className="flex flex-col gap-0.5 shrink-0 items-center">
+                                    <button onClick={selectAllImages} className="text-[9px] text-indigo-500 hover:text-indigo-700 font-bold">全選択</button>
+                                    <button onClick={deselectAllImages} className="text-[9px] text-gray-400 hover:text-gray-600 font-bold">解除</button>
+                                    <span className="text-[9px] text-gray-400 mt-0.5">{selectedImageIdxs.size}/{batchImages.length}</span>
+                                </div>
+
+                                {/* ページナビ */}
+                                <button onClick={() => { saveCurrentImageState(); switchToImage(Math.max(0, currentImageIdx - 1)); }}
+                                    disabled={currentImageIdx <= 0} className="text-gray-400 hover:text-indigo-500 disabled:opacity-30 shrink-0 text-lg font-bold">&#9664;</button>
+
+                                {/* サムネイル */}
+                                <div className="flex gap-1.5 overflow-x-auto flex-1 py-1">
+                                    {batchImages.map((img, i) => {
+                                        const isCurrent = i === currentImageIdx;
+                                        const isSelected = selectedImageIdxs.has(i);
+                                        return (
+                                            <div key={i} className="relative shrink-0 cursor-pointer group"
+                                                onClick={() => { saveCurrentImageState(); switchToImage(i); }}>
+                                                <img src={img.thumbnailUrl} alt={img.name}
+                                                    className={`h-16 w-auto rounded border-2 transition-all ${
+                                                        isCurrent ? 'border-indigo-500 shadow-lg' :
+                                                        isSelected ? 'border-pink-400' : 'border-gray-200 hover:border-gray-400'
+                                                    }`} />
+                                                <div className="absolute top-0.5 left-0.5" onClick={(e) => e.stopPropagation()}>
+                                                    <input type="checkbox" checked={isSelected}
+                                                        onChange={() => toggleImageSelection(i)}
+                                                        className="accent-pink-500 w-3 h-3 cursor-pointer" />
+                                                </div>
+                                                <div className="absolute bottom-0 left-0 right-0 bg-black/50 text-white text-[8px] text-center py-0.5 rounded-b">
+                                                    {i + 1}{img.faceDetected ? ' \u2713' : ''}
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+
+                                {/* ページナビ */}
+                                <button onClick={() => { saveCurrentImageState(); switchToImage(Math.min(batchImages.length - 1, currentImageIdx + 1)); }}
+                                    disabled={currentImageIdx >= batchImages.length - 1} className="text-gray-400 hover:text-indigo-500 disabled:opacity-30 shrink-0 text-lg font-bold">&#9654;</button>
+
+                                <span className="text-[9px] text-gray-400 shrink-0">{currentImageIdx + 1}/{batchImages.length}</span>
                             </div>
                         )}
                     </div>
