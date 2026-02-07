@@ -113,6 +113,59 @@
         };
 
         // ==========================================
+        // ログイン画面
+        // ==========================================
+        const SITE_PASSWORD = 'Bulma_Go';
+
+        const LoginScreen = ({ onLogin }) => {
+            const [pw, setPw] = useState('');
+            const [error, setError] = useState('');
+
+            useEffect(() => {
+                if (localStorage.getItem('vtm_site_pw') === SITE_PASSWORD) onLogin();
+            }, []);
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                if (pw === SITE_PASSWORD) {
+                    localStorage.setItem('vtm_site_pw', pw);
+                    onLogin();
+                } else {
+                    setError('パスワードが違います');
+                }
+            };
+
+            return (
+                <div className="flex h-screen items-center justify-center bg-gradient-to-br from-indigo-100 to-pink-100">
+                    <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-2xl p-8 w-80 space-y-5">
+                        <div className="text-center">
+                            <Icons.Layers className="w-10 h-10 text-indigo-500 mx-auto mb-2"/>
+                            <h1 className="text-lg font-bold text-indigo-600">2.5D VTuber Maker</h1>
+                            <p className="text-xs text-gray-400 mt-1">パスワードを入力してください</p>
+                        </div>
+                        <input type="password" value={pw} onChange={e => setPw(e.target.value)}
+                            placeholder="パスワード" autoFocus
+                            className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl text-sm focus:outline-none focus:border-indigo-400 transition-colors"/>
+                        {error && <p className="text-red-500 text-xs font-bold text-center">{error}</p>}
+                        <button type="submit" disabled={!pw}
+                            className="w-full py-3 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-xl font-bold text-sm shadow-md hover:shadow-lg transition-all disabled:opacity-50">
+                            ログイン
+                        </button>
+                    </form>
+                </div>
+            );
+        };
+
+        // ==========================================
+        // ルートアプリ
+        // ==========================================
+        const App = () => {
+            const [authenticated, setAuthenticated] = useState(false);
+            if (!authenticated) return <LoginScreen onLogin={() => setAuthenticated(true)} />;
+            return <VtuberMaker />;
+        };
+
+        // ==========================================
         // Main Application
         // ==========================================
         const VtuberMaker = () => {
@@ -1111,7 +1164,7 @@
         };
 
         const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<VtuberMaker />);
+        root.render(<App />);
     </script>
 </body>
 </html>
