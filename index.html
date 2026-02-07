@@ -357,6 +357,12 @@
             const bgSpriteRef = useRef(null);
             const maskSpriteRef = useRef(null);
             const debugRingRef = useRef(null);
+            const shuchuSpriteRef = useRef(null);
+
+            // 集中線
+            const [shuchuEnabled, setShuchuEnabled] = useState(false);
+            const [shuchuSettings, setShuchuSettings] = useState({ x: 400, y: 300, scaleX: 1.0, scaleY: 1.0, opacity: 1.0 });
+
 
             // Transform
             const [transform, setTransform] = useState({ x: 400, y: 300, scale: 0.1, rotation: 0 });
@@ -480,6 +486,7 @@
                         canvasRef.current.appendChild(app.view);
                     }
                     pixiAppRef.current = app;
+                    app.stage.sortableChildren = true;
 
                     // パラメータ適用は internalModel.update の上書きで処理するため
                     // Ticker での強制適用は不要
@@ -561,10 +568,77 @@
                 return () => clearTimeout(maskSaveTimer.current);
             }, [isMasked, maskSettings, currentModelId, model]);
 
+            // 集中線画像
+            const SHUCHU_DATA_URL = './shuchu.png';
+
+            // 集中線スプライト管理
+            useEffect(() => {
+                const app = pixiAppRef.current;
+                if (!app) return;
+
+                if (shuchuEnabled) {
+                    if (!shuchuSpriteRef.current) {
+                        const sprite = window.PIXI.Sprite.from(SHUCHU_DATA_URL);
+                        sprite.anchor.set(0.5, 0.5);
+                        sprite.blendMode = window.PIXI.BLEND_MODES.SCREEN;
+                        sprite.interactive = true;
+                        sprite.buttonMode = true;
+                        sprite.zIndex = 9999;
+
+                        // Photoshop風ドラッグ
+                        let dragging = false, dragOffset = { x: 0, y: 0 };
+                        sprite.on('pointerdown', (e) => {
+                            dragging = true;
+                            const pos = e.data.getLocalPosition(sprite.parent);
+                            dragOffset.x = pos.x - sprite.x;
+                            dragOffset.y = pos.y - sprite.y;
+                            e.stopPropagation();
+                        });
+                        const onMove = (e) => {
+                            if (!dragging) return;
+                            const pos = e.data.getLocalPosition(sprite.parent);
+                            sprite.x = pos.x - dragOffset.x;
+                            sprite.y = pos.y - dragOffset.y;
+                            setShuchuSettings(prev => ({ ...prev, x: sprite.x, y: sprite.y }));
+                        };
+                        const onUp = () => { dragging = false; };
+                        app.stage.on('pointermove', onMove);
+                        app.stage.on('pointerup', onUp);
+                        app.stage.on('pointerupoutside', onUp);
+                        sprite._shuchuCleanup = () => {
+                            app.stage.off('pointermove', onMove);
+                            app.stage.off('pointerup', onUp);
+                            app.stage.off('pointerupoutside', onUp);
+                        };
+
+                        app.stage.addChild(sprite);
+                        shuchuSpriteRef.current = sprite;
+                    }
+                    // 設定を反映
+                    const s = shuchuSpriteRef.current;
+                    s.position.set(shuchuSettings.x, shuchuSettings.y);
+                    s.scale.set(shuchuSettings.scaleX, shuchuSettings.scaleY);
+                    s.alpha = shuchuSettings.opacity;
+                    s.visible = true;
+                } else {
+                    if (shuchuSpriteRef.current) {
+                        shuchuSpriteRef.current.visible = false;
+                    }
+                }
+            }, [shuchuEnabled, shuchuSettings]);
+
+            // キャンバスリサイズ時に集中線の位置をリセット
+            useEffect(() => {
+                if (!pixiAppRef.current || !shuchuEnabled) return;
+                const w = pixiAppRef.current.renderer.screen.width;
+                const h = pixiAppRef.current.renderer.screen.height;
+                setShuchuSettings(prev => ({ ...prev, x: w / 2, y: h / 2 }));
+            }, [bgImage]);
+
             // -------------------------------------------------------------------------
             // ハンドラ関連
             // -------------------------------------------------------------------------
-            
+
             // 画像アップロード
             const handleImageFile = (file) => {
                 if (!file) return;
@@ -645,7 +719,7 @@
                 const currentAllParams = allParametersRef.current.length > 0 ? allParametersRef.current : allParameters;
                 const currentParams = currentAllParams.filter(p => isFaceParam(p.id));
                 setBatchImages(prev => prev.map((img, i) =>
-                    i === currentImageIdx ? { ...img, transform: currentTransform, allParameters: currentAllParams, parameters: currentParams } : img
+                    i === currentImageIdx ? { ...img, transform: currentTransform, allParameters: currentAllParams, parameters: currentParams, shuchuEnabled, shuchuSettings } : img
                 ));
             };
 
@@ -682,6 +756,11 @@
                 if (img.allParameters.length > 0) {
                     setAllParameters(img.allParameters);
                     setParameters(img.parameters);
+                }
+                // 集中線の状態を画像ごとに復元
+                if (img.shuchuEnabled !== undefined) {
+                    setShuchuEnabled(img.shuchuEnabled);
+                    setShuchuSettings(img.shuchuSettings);
                 }
             };
 
@@ -751,6 +830,7 @@
                             transform: { x: cs.w / 2, y: cs.h / 2, scale: 0.1, rotation: 0 },
                             allParameters: defaultAllParams, parameters: defaultParams,
                             canvasSize: cs, faceDetected: false,
+                            shuchuEnabled: false, shuchuSettings: { x: cs.w / 2, y: cs.h / 2, scaleX: 1.0, scaleY: 1.0, opacity: 1.0 },
                         });
                     } catch (e) {
                         console.warn('画像スキップ:', path, e);
@@ -1220,7 +1300,7 @@
                 const savedImgs = [...batchImages];
                 // 最新のstateを反映
                 if (currentImageIdx >= 0) {
-                    savedImgs[currentImageIdx] = { ...savedImgs[currentImageIdx], transform, allParameters, parameters };
+                    savedImgs[currentImageIdx] = { ...savedImgs[currentImageIdx], transform, allParameters, parameters, shuchuEnabled, shuchuSettings };
                 }
 
                 for (let i = 0; i < savedImgs.length; i++) {
@@ -1248,6 +1328,18 @@
                     }
                     // パラメータ適用
                     allParametersRef.current = img.allParameters;
+
+                    // 集中線の適用（画像ごと）
+                    if (shuchuSpriteRef.current) {
+                        if (img.shuchuEnabled) {
+                            shuchuSpriteRef.current.visible = true;
+                            shuchuSpriteRef.current.position.set(img.shuchuSettings.x, img.shuchuSettings.y);
+                            shuchuSpriteRef.current.scale.set(img.shuchuSettings.scaleX, img.shuchuSettings.scaleY);
+                            shuchuSpriteRef.current.alpha = img.shuchuSettings.opacity;
+                        } else {
+                            shuchuSpriteRef.current.visible = false;
+                        }
+                    }
 
                     await new Promise(r => setTimeout(r, 100));
                     app.renderer.render(app.stage);
@@ -1420,6 +1512,37 @@
                                         )}
                                     </div>
 
+                                    {/* 集中線フィルター */}
+                                    <div className="p-2 bg-amber-50 rounded-lg space-y-1.5">
+                                        <div className="flex justify-between items-center">
+                                            <label className="text-[10px] font-bold text-amber-700 flex gap-1"><Icons.Target className="w-3 h-3"/> 集中線</label>
+                                            <input type="checkbox" checked={shuchuEnabled} onChange={(e)=>setShuchuEnabled(e.target.checked)} className="accent-amber-600 w-3.5 h-3.5"/>
+                                        </div>
+                                        {shuchuEnabled && (
+                                            <div className="space-y-1">
+                                                <div className="flex items-center gap-2">
+                                                    <label className="text-[10px] text-amber-500 w-6 shrink-0">幅</label>
+                                                    <input type="range" min="0.1" max="5.0" step="0.05" value={shuchuSettings.scaleX}
+                                                        onChange={(e)=>setShuchuSettings(p=>({...p, scaleX: Number(e.target.value)}))} className="range-slider flex-1"/>
+                                                    <span className="text-[9px] text-gray-400 w-7 text-right">{shuchuSettings.scaleX.toFixed(1)}</span>
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <label className="text-[10px] text-amber-500 w-6 shrink-0">高さ</label>
+                                                    <input type="range" min="0.1" max="5.0" step="0.05" value={shuchuSettings.scaleY}
+                                                        onChange={(e)=>setShuchuSettings(p=>({...p, scaleY: Number(e.target.value)}))} className="range-slider flex-1"/>
+                                                    <span className="text-[9px] text-gray-400 w-7 text-right">{shuchuSettings.scaleY.toFixed(1)}</span>
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <label className="text-[10px] text-amber-500 w-6 shrink-0">透明</label>
+                                                    <input type="range" min="0" max="1.0" step="0.05" value={shuchuSettings.opacity}
+                                                        onChange={(e)=>setShuchuSettings(p=>({...p, opacity: Number(e.target.value)}))} className="range-slider flex-1"/>
+                                                    <span className="text-[9px] text-gray-400 w-7 text-right">{(shuchuSettings.opacity * 100).toFixed(0)}%</span>
+                                                </div>
+                                                <p className="text-[8px] text-amber-400 text-center">ドラッグで移動できます</p>
+                                            </div>
+                                        )}
+                                    </div>
+
                                     {/* Parameters - カテゴリ別折りたたみ */}
                                     <div className="space-y-1">
                                         <div className="flex justify-between items-center">
@@ -1565,6 +1688,16 @@
                                                     <input type="checkbox" checked={isSelected}
                                                         onChange={() => toggleImageSelection(i)}
                                                         className="accent-pink-500 w-3 h-3 cursor-pointer" />
+                                                </div>
+                                                <div className="absolute top-0.5 right-0.5" onClick={(e) => { e.stopPropagation();
+                                                    if (isCurrent) {
+                                                        setShuchuEnabled(prev => !prev);
+                                                    }
+                                                    setBatchImages(prev => prev.map((im, j) => j === i ? { ...im, shuchuEnabled: !im.shuchuEnabled } : im));
+                                                }}>
+                                                    <div className={`w-3.5 h-3.5 rounded-full flex items-center justify-center text-[7px] font-bold cursor-pointer transition-colors ${
+                                                        (isCurrent ? shuchuEnabled : img.shuchuEnabled) ? 'bg-amber-500 text-white' : 'bg-gray-300/70 text-gray-500'
+                                                    }`} title="集中線">集</div>
                                                 </div>
                                                 <div className="absolute bottom-0 left-0 right-0 bg-black/50 text-white text-[8px] text-center py-0.5 rounded-b">
                                                     {i + 1}{img.faceDetected ? ' \u2713' : ''}
