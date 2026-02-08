@@ -1671,7 +1671,7 @@
                                             {/* 集中線画像 (キャンバス内にクリップ) */}
                                             <div style={{position:'absolute',left:4,top:4,width:cw,height:ch,overflow:'hidden',pointerEvents:'none',zIndex:20}}>
                                                 <img src={SHUCHU_DATA_URL} draggable={false}
-                                                    style={{position:'absolute',left:shuchuSettings.x - w/2,top:shuchuSettings.y - h/2,width:w,height:h,display:'block',mixBlendMode:'screen',opacity:shuchuSettings.opacity}} />
+                                                    style={{position:'absolute',left:shuchuSettings.x - w/2,top:shuchuSettings.y - h/2,width:w,height:h,maxWidth:'none',maxHeight:'none',display:'block',mixBlendMode:'screen',opacity:shuchuSettings.opacity}} />
                                             </div>
                                             {/* 枠線・ハンドル (キャンバス外でも表示) */}
                                             <div style={{position:'absolute',left,top,width:w,height:h,pointerEvents:'none',zIndex:21}}>
