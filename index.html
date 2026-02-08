@@ -358,10 +358,11 @@
             const maskSpriteRef = useRef(null);
             const debugRingRef = useRef(null);
             const shuchuSpriteRef = useRef(null);
+            const shuchuBorderRef = useRef(null); // 集中線の枠線表示用
 
             // 集中線
             const [shuchuEnabled, setShuchuEnabled] = useState(false);
-            const [shuchuSettings, setShuchuSettings] = useState({ x: 400, y: 300, scaleX: 1.0, scaleY: 1.0, opacity: 1.0 });
+            const [shuchuSettings, setShuchuSettings] = useState({ x: 400, y: 300, scaleX: 0.15, scaleY: 0.15, opacity: 1.0 });
 
 
             // Transform
@@ -613,6 +614,12 @@
 
                         app.stage.addChild(sprite);
                         shuchuSpriteRef.current = sprite;
+
+                        // 枠線用Graphics
+                        const border = new window.PIXI.Graphics();
+                        border.zIndex = 10000;
+                        app.stage.addChild(border);
+                        shuchuBorderRef.current = border;
                     }
                     // 設定を反映
                     const s = shuchuSpriteRef.current;
@@ -620,19 +627,40 @@
                     s.scale.set(shuchuSettings.scaleX, shuchuSettings.scaleY);
                     s.alpha = shuchuSettings.opacity;
                     s.visible = true;
+
+                    // 枠線を描画（集中線画像の境界を表示）
+                    if (shuchuBorderRef.current && s.texture.valid) {
+                        const b = shuchuBorderRef.current;
+                        b.clear();
+                        b.lineStyle(2, 0xff8800, 0.7);
+                        const w = s.texture.width * shuchuSettings.scaleX;
+                        const h = s.texture.height * shuchuSettings.scaleY;
+                        b.drawRect(shuchuSettings.x - w / 2, shuchuSettings.y - h / 2, w, h);
+                        // 中心の十字
+                        b.lineStyle(1, 0xff8800, 0.5);
+                        const cx = shuchuSettings.x, cy = shuchuSettings.y;
+                        b.moveTo(cx - 15, cy); b.lineTo(cx + 15, cy);
+                        b.moveTo(cx, cy - 15); b.lineTo(cx, cy + 15);
+                        b.visible = true;
+                    }
                 } else {
                     if (shuchuSpriteRef.current) {
                         shuchuSpriteRef.current.visible = false;
                     }
+                    if (shuchuBorderRef.current) {
+                        shuchuBorderRef.current.visible = false;
+                    }
                 }
             }, [shuchuEnabled, shuchuSettings]);
 
-            // キャンバスリサイズ時に集中線の位置をリセット
+            // キャンバスリサイズ時に集中線の位置・スケールをリセット
             useEffect(() => {
                 if (!pixiAppRef.current || !shuchuEnabled) return;
                 const w = pixiAppRef.current.renderer.screen.width;
                 const h = pixiAppRef.current.renderer.screen.height;
-                setShuchuSettings(prev => ({ ...prev, x: w / 2, y: h / 2 }));
+                // 画像サイズ(6667x5000)に対してキャンバスにちょうど収まるスケールを計算
+                const autoScale = Math.max(w / 6667, h / 5000) * 1.2;
+                setShuchuSettings(prev => ({ ...prev, x: w / 2, y: h / 2, scaleX: autoScale, scaleY: autoScale }));
             }, [bgImage]);
 
             // -------------------------------------------------------------------------
@@ -830,7 +858,7 @@
                             transform: { x: cs.w / 2, y: cs.h / 2, scale: 0.1, rotation: 0 },
                             allParameters: defaultAllParams, parameters: defaultParams,
                             canvasSize: cs, faceDetected: false,
-                            shuchuEnabled: false, shuchuSettings: { x: cs.w / 2, y: cs.h / 2, scaleX: 1.0, scaleY: 1.0, opacity: 1.0 },
+                            shuchuEnabled: false, shuchuSettings: { x: cs.w / 2, y: cs.h / 2, scaleX: Math.max(cs.w / 6667, cs.h / 5000) * 1.2, scaleY: Math.max(cs.w / 6667, cs.h / 5000) * 1.2, opacity: 1.0 },
                         });
                     } catch (e) {
                         console.warn('画像スキップ:', path, e);
@@ -1279,12 +1307,14 @@
             const handleDownload = () => {
                 if (!pixiAppRef.current) return;
                 if (debugRingRef.current) debugRingRef.current.visible = false;
+                if (shuchuBorderRef.current) shuchuBorderRef.current.visible = false;
                 pixiAppRef.current.renderer.render(pixiAppRef.current.stage);
                 const a = document.createElement('a');
                 a.download = 'vtuber_image.png';
                 a.href = pixiAppRef.current.view.toDataURL('image/png');
                 a.click();
                 if (debugRingRef.current) debugRingRef.current.visible = true;
+                if (shuchuBorderRef.current && shuchuEnabled) shuchuBorderRef.current.visible = true;
             };
 
             // 全画像一括ダウンロード
@@ -1296,6 +1326,7 @@
                 const app = pixiAppRef.current;
                 const jsZip = new window.JSZip();
                 if (debugRingRef.current) debugRingRef.current.visible = false;
+                if (shuchuBorderRef.current) shuchuBorderRef.current.visible = false;
 
                 const savedImgs = [...batchImages];
                 // 最新のstateを反映
@@ -1353,6 +1384,7 @@
                 // 元の画像に戻す
                 switchToImage(currentImageIdx, savedImgs);
                 if (debugRingRef.current) debugRingRef.current.visible = true;
+                if (shuchuBorderRef.current && shuchuEnabled) shuchuBorderRef.current.visible = true;
 
                 setLoadingText('ZIPを生成中...');
                 const blob = await jsZip.generateAsync({ type: 'blob' });
@@ -1522,23 +1554,23 @@
                                             <div className="space-y-1">
                                                 <div className="flex items-center gap-2">
                                                     <label className="text-[10px] text-amber-500 w-6 shrink-0">幅</label>
-                                                    <input type="range" min="0.1" max="5.0" step="0.05" value={shuchuSettings.scaleX}
+                                                    <input type="range" min="0.02" max="2.0" step="0.01" value={shuchuSettings.scaleX}
                                                         onChange={(e)=>setShuchuSettings(p=>({...p, scaleX: Number(e.target.value)}))} className="range-slider flex-1"/>
-                                                    <span className="text-[9px] text-gray-400 w-7 text-right">{shuchuSettings.scaleX.toFixed(1)}</span>
+                                                    <span className="text-[9px] text-gray-400 w-10 text-right">{shuchuSettings.scaleX.toFixed(2)}</span>
                                                 </div>
                                                 <div className="flex items-center gap-2">
                                                     <label className="text-[10px] text-amber-500 w-6 shrink-0">高さ</label>
-                                                    <input type="range" min="0.1" max="5.0" step="0.05" value={shuchuSettings.scaleY}
+                                                    <input type="range" min="0.02" max="2.0" step="0.01" value={shuchuSettings.scaleY}
                                                         onChange={(e)=>setShuchuSettings(p=>({...p, scaleY: Number(e.target.value)}))} className="range-slider flex-1"/>
-                                                    <span className="text-[9px] text-gray-400 w-7 text-right">{shuchuSettings.scaleY.toFixed(1)}</span>
+                                                    <span className="text-[9px] text-gray-400 w-10 text-right">{shuchuSettings.scaleY.toFixed(2)}</span>
                                                 </div>
                                                 <div className="flex items-center gap-2">
                                                     <label className="text-[10px] text-amber-500 w-6 shrink-0">透明</label>
                                                     <input type="range" min="0" max="1.0" step="0.05" value={shuchuSettings.opacity}
                                                         onChange={(e)=>setShuchuSettings(p=>({...p, opacity: Number(e.target.value)}))} className="range-slider flex-1"/>
-                                                    <span className="text-[9px] text-gray-400 w-7 text-right">{(shuchuSettings.opacity * 100).toFixed(0)}%</span>
+                                                    <span className="text-[9px] text-gray-400 w-10 text-right">{(shuchuSettings.opacity * 100).toFixed(0)}%</span>
                                                 </div>
-                                                <p className="text-[8px] text-amber-400 text-center">ドラッグで移動できます</p>
+                                                <p className="text-[8px] text-amber-400 text-center">ドラッグで移動 / オレンジ枠=画像範囲</p>
                                             </div>
                                         )}
                                     </div>
