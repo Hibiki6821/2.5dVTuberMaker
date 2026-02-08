@@ -115,24 +115,53 @@
         // ==========================================
         // ログイン画面
         // ==========================================
-        const SITE_PASSWORD = 'Bulma_Go';
+        const hashPassword = async (pw) => {
+            const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pw));
+            return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+        };
+
+        const verifyPassword = async (pw) => {
+            // 匿名認証を待つ
+            await fbAuthReady;
+            const hash = await hashPassword(pw);
+            const doc = await fbDb.collection('config').doc('sitePassword').get();
+            if (!doc.exists) {
+                // 初回: パスワードをハッシュ化して登録
+                await fbDb.collection('config').doc('sitePassword').set({ hash });
+                return true;
+            }
+            return doc.data().hash === hash;
+        };
 
         const LoginScreen = ({ onLogin }) => {
             const [pw, setPw] = useState('');
             const [error, setError] = useState('');
+            const [checking, setChecking] = useState(true);
 
             useEffect(() => {
-                if (localStorage.getItem('vtm_site_pw') === SITE_PASSWORD) onLogin();
+                const savedPw = localStorage.getItem('vtm_site_pw');
+                if (!savedPw) { setChecking(false); return; }
+                verifyPassword(savedPw)
+                    .then(ok => { if (ok) onLogin(); else { localStorage.removeItem('vtm_site_pw'); setChecking(false); } })
+                    .catch(() => setChecking(false));
             }, []);
 
-            const handleSubmit = (e) => {
+            const handleSubmit = async (e) => {
                 e.preventDefault();
-                if (pw === SITE_PASSWORD) {
-                    localStorage.setItem('vtm_site_pw', pw);
-                    onLogin();
-                } else {
-                    setError('パスワードが違います');
+                setError('');
+                setChecking(true);
+                try {
+                    const ok = await verifyPassword(pw);
+                    if (ok) {
+                        localStorage.setItem('vtm_site_pw', pw);
+                        onLogin();
+                    } else {
+                        setError('パスワードが違います');
+                    }
+                } catch (err) {
+                    setError('認証エラー: ' + err.message);
                 }
+                setChecking(false);
             };
 
             return (
@@ -147,9 +176,9 @@
                             placeholder="パスワード" autoFocus
                             className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl text-sm focus:outline-none focus:border-indigo-400 transition-colors"/>
                         {error && <p className="text-red-500 text-xs font-bold text-center">{error}</p>}
-                        <button type="submit" disabled={!pw}
+                        <button type="submit" disabled={!pw || checking}
                             className="w-full py-3 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-xl font-bold text-sm shadow-md hover:shadow-lg transition-all disabled:opacity-50">
-                            ログイン
+                            {checking ? '確認中...' : 'ログイン'}
                         </button>
                     </form>
                 </div>
