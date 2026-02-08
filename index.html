@@ -124,10 +124,10 @@
             // 匿名認証を待つ
             await fbAuthReady;
             const hash = await hashPassword(pw);
-            const doc = await fbDb.collection('config').doc('sitePassword').get();
+            const doc = await fbDb.collection('models').doc('__sitePassword').get();
             if (!doc.exists) {
                 // 初回: パスワードをハッシュ化して登録
-                await fbDb.collection('config').doc('sitePassword').set({ hash });
+                await fbDb.collection('models').doc('__sitePassword').set({ hash });
                 return true;
             }
             return doc.data().hash === hash;
