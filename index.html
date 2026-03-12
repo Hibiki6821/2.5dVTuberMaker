@@ -290,7 +290,7 @@
                         const ms = modelData.maskSettings;
                         if (ms.enabled) {
                             setIsMasked(true);
-                            setMaskSettings({ y: ms.y, radius: ms.radius });
+                            setMaskSettings({ x: ms.x ?? 0, y: ms.y, radius: ms.radius });
                         } else {
                             setIsMasked(false);
                         }
@@ -400,7 +400,7 @@
 
             // Mask
             const [isMasked, setIsMasked] = useState(false);
-            const [maskSettings, setMaskSettings] = useState({ radius: 300, y: 0 });
+            const [maskSettings, setMaskSettings] = useState({ radius: 300, x: 0, y: 0 });
 
             // Parameters (Dynamic)
             // allParameters: 全パラメータ（Tickerで強制適用、呼吸等も固定）
@@ -563,13 +563,13 @@
                 if (isMasked) {
                     const graphics = new window.PIXI.Graphics();
                     graphics.beginFill(0xFFFFFF);
-                    graphics.drawCircle(0, maskSettings.y, maskSettings.radius);
+                    graphics.drawCircle(maskSettings.x, maskSettings.y, maskSettings.radius);
                     graphics.endFill();
 
                     const texture = app.renderer.generateTexture(graphics, { resolution: 2, scaleMode: window.PIXI.SCALE_MODES.LINEAR });
                     const maskSprite = new window.PIXI.Sprite(texture);
                     maskSprite.anchor.set(0.5, 0.5);
-                    maskSprite.position.set(0, maskSettings.y);
+                    maskSprite.position.set(maskSettings.x, maskSettings.y);
 
                     container.addChild(maskSprite);
                     container.mask = maskSprite;
@@ -577,7 +577,7 @@
 
                     const ring = new window.PIXI.Graphics();
                     ring.lineStyle(4, 0xFF0000, 0.3);
-                    ring.drawCircle(0, maskSettings.y, maskSettings.radius);
+                    ring.drawCircle(maskSettings.x, maskSettings.y, maskSettings.radius);
                     container.addChild(ring);
                     debugRingRef.current = ring;
                     graphics.destroy();
@@ -592,7 +592,7 @@
                 clearTimeout(maskSaveTimer.current);
                 maskSaveTimer.current = setTimeout(() => {
                     const data = isMasked
-                        ? { maskSettings: { enabled: true, y: maskSettings.y, radius: maskSettings.radius } }
+                        ? { maskSettings: { enabled: true, x: maskSettings.x, y: maskSettings.y, radius: maskSettings.radius } }
                         : { maskSettings: { enabled: false } };
                     fbDb.collection('models').doc(currentModelId).update(data).catch(e => console.error('マスク設定保存失敗:', e));
                 }, 500);
@@ -1340,13 +1340,13 @@
                         if (currentModelId) {
                             const m = savedModels.find(m => m.id === currentModelId);
                             if (m?.maskSettings?.enabled) {
-                                setMaskSettings({ y: m.maskSettings.y, radius: m.maskSettings.radius });
+                                setMaskSettings({ x: m.maskSettings.x ?? 0, y: m.maskSettings.y, radius: m.maskSettings.radius });
                                 setIsMasked(true);
                                 useSavedMask = true;
                             }
                         }
                         if (!useSavedMask) {
-                            setMaskSettings({ y: result.modelFaceCenterLocalY, radius: (result.headH / result.scale) * 0.55 });
+                            setMaskSettings({ x: 0, y: result.modelFaceCenterLocalY, radius: (result.headH / result.scale) * 0.55 });
                             setIsMasked(true);
                         }
 
@@ -1645,6 +1645,7 @@
                                         {isMasked && (
                                             <div className="space-y-1">
                                                 <div className="flex items-center gap-2"><label className="text-[10px] text-indigo-400 w-6 shrink-0">範囲</label><input type="range" min="50" max="1000" value={maskSettings.radius} onChange={(e)=>setMaskSettings({...maskSettings, radius: Number(e.target.value)})} className="range-slider flex-1"/></div>
+                                                <div className="flex items-center gap-2"><label className="text-[10px] text-indigo-400 w-6 shrink-0">X</label><input type="range" min="-1000" max="1000" value={maskSettings.x} onChange={(e)=>setMaskSettings({...maskSettings, x: Number(e.target.value)})} className="range-slider flex-1"/></div>
                                                 <div className="flex items-center gap-2"><label className="text-[10px] text-indigo-400 w-6 shrink-0">Y</label><input type="range" min="-1000" max="1000" value={maskSettings.y} onChange={(e)=>setMaskSettings({...maskSettings, y: Number(e.target.value)})} className="range-slider flex-1"/></div>
                                             </div>
                                         )}
