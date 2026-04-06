@@ -472,8 +472,8 @@
                         setLoadProgress(25);
                         await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pixi.js/6.5.9/browser/pixi.min.js');
                         setLoadProgress(50);
-                        // Cubism 5 Core
-                        await loadScript('https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js');
+                        // Cubism 4 Core (jsdelivr経由でCORS対応)
+                        await loadScript('https://cdn.jsdelivr.net/npm/@live2d/core@4.0.0/live2dcubismcore.min.js');
                         setLoadProgress(75);
                         // Pixi Live2D Display (Cubism 4 support)
                         if (!window.PIXI?.live2d) {
@@ -807,6 +807,7 @@
 
                 // 状態復元
                 setBgImage(img.url);
+                setOriginalBgSize(img.originalSize ? { ...img.originalSize } : null);
                 setTransform(img.transform);
                 // パラメータが空の場合は現在のモデルのパラメータを維持
                 if (img.allParameters.length > 0) {
@@ -1194,6 +1195,10 @@
                     const stage = pixiAppRef.current.stage;
                     stage.interactive = true;
                     stage.hitArea = new window.PIXI.Rectangle(0, 0, screenW, screenH);
+                    // 多重登録防止: 既存リスナーを外してから再登録
+                    stage.off('pointermove', onDragMove);
+                    stage.off('pointerup', onDragEnd);
+                    stage.off('pointerupoutside', onDragEnd);
                     stage.on('pointermove', onDragMove);
                     stage.on('pointerup', onDragEnd);
                     stage.on('pointerupoutside', onDragEnd);
@@ -1316,12 +1321,18 @@
                     const img = new Image();
                     img.crossOrigin = "Anonymous";
                     img.onload = () => {
-                        // Canvas経由で渡すことでData URLの読み込み失敗を回避
-                        const c = document.createElement('canvas');
-                        c.width = img.naturalWidth; c.height = img.naturalHeight;
-                        c.getContext('2d').drawImage(img, 0, 0);
-                        faceMesh.send({ image: c });
+                        try {
+                            // Canvas経由で渡すことでData URLの読み込み失敗を回避
+                            const c = document.createElement('canvas');
+                            c.width = img.naturalWidth; c.height = img.naturalHeight;
+                            c.getContext('2d').drawImage(img, 0, 0);
+                            faceMesh.send({ image: c });
+                        } catch (e) {
+                            console.error('faceMesh.send 失敗:', e);
+                            resolve(null);
+                        }
                     };
+                    img.onerror = () => { console.error('顔検出用画像の読み込み失敗:', imageUrl); resolve(null); };
                     img.src = imageUrl;
                 });
             };
@@ -1416,7 +1427,7 @@
                 alert(`顔検出完了！ ${detected}/${batchImages.length}枚で顔を検出しました。`);
             };
 
-            const handleDownload = () => {
+            const handleDownload = async () => {
                 if (!pixiAppRef.current) return;
                 const app = pixiAppRef.current;
                 const resolution = app.renderer.resolution || 1;
@@ -1426,55 +1437,49 @@
                 // アップロード元の原寸があれば、そのサイズで書き出す
                 const origW = originalBgSize ? originalBgSize.w : dispW * resolution;
                 const origH = originalBgSize ? originalBgSize.h : dispH * resolution;
-                // PIXIのresolutionを考慮した論理ピクセルサイズ (出力 = logicalW * resolution = origW)
-                const logicalW = Math.round(origW / resolution);
-                const logicalH = Math.round(origH / resolution);
-                const needsScale = logicalW !== dispW || logicalH !== dispH;
-                const ratio = logicalW / dispW;
 
                 if (debugRingRef.current) debugRingRef.current.visible = false;
-
-                if (needsScale && bgSpriteRef.current) {
-                    bgSpriteRef.current.width = logicalW;
-                    bgSpriteRef.current.height = logicalH;
-                    app.renderer.resize(logicalW, logicalH);
-                    if (modelContainerRef.current) {
-                        const c = modelContainerRef.current;
-                        c.position.set(transform.x * ratio, transform.y * ratio);
-                        c.scale.set(transform.scale * ratio);
-                        c.rotation = transform.rotation * (Math.PI / 180);
-                    }
-                    if (shuchuSpriteRef.current && shuchuEnabled) {
-                        shuchuSpriteRef.current.position.set(shuchuSettings.x * ratio, shuchuSettings.y * ratio);
-                        shuchuSpriteRef.current.scale.set(shuchuSettings.scaleX * ratio, shuchuSettings.scaleY * ratio);
-                        shuchuSpriteRef.current.alpha = shuchuSettings.opacity;
-                        shuchuSpriteRef.current.visible = true;
-                    }
-                } else if (shuchuSpriteRef.current && shuchuEnabled) {
+                if (shuchuSpriteRef.current && shuchuEnabled) {
                     shuchuSpriteRef.current.visible = true;
                 }
 
+                // PIXIレンダラーのサイズは変えずに、背景を隠してモデルのみを透過キャンバスに描画
+                // → resizeによる座標ズレを回避
+                if (bgSpriteRef.current) bgSpriteRef.current.visible = false;
                 app.renderer.render(app.stage);
+                if (bgSpriteRef.current) bgSpriteRef.current.visible = true;
+
+                // 2Dキャンバスで合成: 原寸背景 + PIXIキャンバス(拡大)
+                const outCanvas = document.createElement('canvas');
+                outCanvas.width = origW;
+                outCanvas.height = origH;
+                const ctx = outCanvas.getContext('2d');
+
+                if (bgImage) {
+                    await new Promise((resolve) => {
+                        const bgEl = new Image();
+                        bgEl.onload = () => {
+                            ctx.drawImage(bgEl, 0, 0, origW, origH);
+                            ctx.drawImage(app.view, 0, 0, origW, origH);
+                            resolve();
+                        };
+                        bgEl.onerror = () => {
+                            // 背景読み込み失敗時はモデルのみで出力
+                            ctx.drawImage(app.view, 0, 0, origW, origH);
+                            resolve();
+                        };
+                        bgEl.src = bgImage;
+                    });
+                } else {
+                    // 背景なし: モデルのみ透過PNG
+                    ctx.drawImage(app.view, 0, 0, origW, origH);
+                }
+
                 const a = document.createElement('a');
                 a.download = 'vtuber_image.png';
-                a.href = app.view.toDataURL('image/png');
+                a.href = outCanvas.toDataURL('image/png');
                 a.click();
 
-                // 表示サイズに戻す
-                if (needsScale && bgSpriteRef.current) {
-                    bgSpriteRef.current.width = dispW;
-                    bgSpriteRef.current.height = dispH;
-                    app.renderer.resize(dispW, dispH);
-                    if (modelContainerRef.current) {
-                        const c = modelContainerRef.current;
-                        c.position.set(transform.x, transform.y);
-                        c.scale.set(transform.scale);
-                    }
-                    if (shuchuSpriteRef.current) {
-                        shuchuSpriteRef.current.position.set(shuchuSettings.x, shuchuSettings.y);
-                        shuchuSpriteRef.current.scale.set(shuchuSettings.scaleX, shuchuSettings.scaleY);
-                    }
-                }
                 if (debugRingRef.current) debugRingRef.current.visible = true;
                 if (shuchuSpriteRef.current) shuchuSpriteRef.current.visible = false;
             };
@@ -1504,38 +1509,35 @@
                     // 原寸サイズを取得（なければ表示サイズにフォールバック）
                     const origW = img.originalSize ? img.originalSize.w : img.canvasSize.w * resolution;
                     const origH = img.originalSize ? img.originalSize.h : img.canvasSize.h * resolution;
-                    const logicalW = Math.round(origW / resolution);
-                    const logicalH = Math.round(origH / resolution);
-                    const ratio = logicalW / img.canvasSize.w;
 
-                    // 背景差し替え（原寸サイズで）
+                    // 背景差し替え（表示サイズで、transformはratioなし）
                     if (bgSpriteRef.current) {
                         app.stage.removeChild(bgSpriteRef.current);
                         bgSpriteRef.current.destroy({ texture: true, baseTexture: true });
                     }
-                    app.renderer.resize(logicalW, logicalH);
+                    app.renderer.resize(img.canvasSize.w, img.canvasSize.h);
                     const bg = window.PIXI.Sprite.from(img.url);
-                    bg.width = logicalW; bg.height = logicalH;
+                    bg.width = img.canvasSize.w; bg.height = img.canvasSize.h;
                     bg.zIndex = -1;
                     app.stage.addChildAt(bg, 0);
                     bgSpriteRef.current = bg;
 
-                    // transform適用（原寸比率でスケール）
+                    // transform適用（表示サイズのままでOK、ratioなし）
                     if (modelContainerRef.current) {
                         const c = modelContainerRef.current;
-                        c.position.set(img.transform.x * ratio, img.transform.y * ratio);
-                        c.scale.set(img.transform.scale * ratio);
+                        c.position.set(img.transform.x, img.transform.y);
+                        c.scale.set(img.transform.scale);
                         c.rotation = img.transform.rotation * (Math.PI / 180);
                     }
                     // パラメータ適用
                     allParametersRef.current = img.allParameters;
 
-                    // 集中線の適用（画像ごと・原寸比率でスケール）
+                    // 集中線の適用（ratioなし）
                     if (shuchuSpriteRef.current) {
                         if (img.shuchuEnabled) {
                             shuchuSpriteRef.current.visible = true;
-                            shuchuSpriteRef.current.position.set(img.shuchuSettings.x * ratio, img.shuchuSettings.y * ratio);
-                            shuchuSpriteRef.current.scale.set(img.shuchuSettings.scaleX * ratio, img.shuchuSettings.scaleY * ratio);
+                            shuchuSpriteRef.current.position.set(img.shuchuSettings.x, img.shuchuSettings.y);
+                            shuchuSpriteRef.current.scale.set(img.shuchuSettings.scaleX, img.shuchuSettings.scaleY);
                             shuchuSpriteRef.current.alpha = img.shuchuSettings.opacity;
                         } else {
                             shuchuSpriteRef.current.visible = false;
@@ -1543,8 +1545,32 @@
                     }
 
                     await new Promise(r => setTimeout(r, 100));
+
+                    // 背景を隠してモデルのみを透過キャンバスに描画（resizeによる座標ズレを回避）
+                    bgSpriteRef.current.visible = false;
                     app.renderer.render(app.stage);
-                    const dataUrl = app.view.toDataURL('image/png');
+                    bgSpriteRef.current.visible = true;
+
+                    // 2Dキャンバスで合成: 原寸背景 + PIXIキャンバス(拡大)
+                    const outCanvas = document.createElement('canvas');
+                    outCanvas.width = origW;
+                    outCanvas.height = origH;
+                    const ctx = outCanvas.getContext('2d');
+                    await new Promise((resolve) => {
+                        const bgEl = new Image();
+                        bgEl.onload = () => {
+                            ctx.drawImage(bgEl, 0, 0, origW, origH);
+                            ctx.drawImage(app.view, 0, 0, origW, origH);
+                            resolve();
+                        };
+                        bgEl.onerror = () => {
+                            ctx.drawImage(app.view, 0, 0, origW, origH);
+                            resolve();
+                        };
+                        bgEl.src = img.url;
+                    });
+
+                    const dataUrl = outCanvas.toDataURL('image/png');
                     const base64Data = dataUrl.split(',')[1];
                     const padIdx = String(i + 1).padStart(3, '0');
                     const baseName = img.name.replace(/\.[^.]+$/, '');
