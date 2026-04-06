@@ -472,8 +472,8 @@
                         setLoadProgress(25);
                         await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pixi.js/6.5.9/browser/pixi.min.js');
                         setLoadProgress(50);
-                        // Cubism 4 Core (jsdelivr経由でCORS対応)
-                        await loadScript('https://cdn.jsdelivr.net/npm/@live2d/core@4.0.0/live2dcubismcore.min.js');
+                        // Cubism 4 Core (公式CDN: crossOriginなしで読み込み可能)
+                        await loadScript('https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js');
                         setLoadProgress(75);
                         // Pixi Live2D Display (Cubism 4 support)
                         if (!window.PIXI?.live2d) {
