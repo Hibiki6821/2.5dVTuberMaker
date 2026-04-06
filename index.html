@@ -200,6 +200,7 @@
         const VtuberMaker = () => {
             const [libsLoaded, setLibsLoaded] = useState(false);
             const [bgImage, setBgImage] = useState(null);
+            const [originalBgSize, setOriginalBgSize] = useState(null); // アップロード元の画像の原寸
             const [model, setModel] = useState(null);
             const [loading, setLoading] = useState(false);
             const [loadingText, setLoadingText] = useState('');
@@ -270,7 +271,7 @@
                     await fbDb.collection('models').doc(modelId).set({
                         name, createdAt: firebase.firestore.FieldValue.serverTimestamp(),
                         size: currentZipFile.size,
-                        maskSettings: isMasked ? { enabled: true, y: maskSettings.y, radius: maskSettings.radius } : { enabled: false },
+                        maskSettings: isMasked ? { enabled: true, x: maskSettings.x, y: maskSettings.y, radius: maskSettings.radius } : { enabled: false },
                     });
                     await loadSavedModels();
                     setCurrentModelId(modelId);
@@ -705,12 +706,14 @@
                          const app = pixiAppRef.current;
                          const maxWidth = 800, maxHeight = 600;
                          let w = bg.width, h = bg.height;
+                         setOriginalBgSize({ w, h }); // スケール前の原寸を保存
                          if (w > maxWidth || h > maxHeight) {
                              const r = Math.min(maxWidth/w, maxHeight/h);
                              w *= r; h *= r;
                              bg.width = w; bg.height = h;
                          }
                          app.renderer.resize(w, h);
+                         if (app.stage) app.stage.hitArea = new window.PIXI.Rectangle(0, 0, w, h);
                          setTransform(p => ({ ...p, x: w/2, y: h/2 }));
                     };
 
@@ -882,6 +885,7 @@
                             url, name: path.split('/').pop(), thumbnailUrl,
                             transform: { x: cs.w / 2, y: cs.h / 2, scale: 0.1, rotation: 0 },
                             allParameters: defaultAllParams, parameters: defaultParams,
+                            originalSize: { w: dims.width, h: dims.height },
                             canvasSize: cs, faceDetected: false,
                             shuchuEnabled: false, shuchuSettings: { x: cs.w / 2, y: cs.h / 2, scaleX: Math.max(cs.w / 6667, cs.h / 5000) * 1.2, scaleY: Math.max(cs.w / 6667, cs.h / 5000) * 1.2, opacity: 1.0 },
                         });
@@ -918,6 +922,7 @@
                             url: bgImage, name: 'current.png', thumbnailUrl,
                             transform: { ...transform },
                             allParameters: srcParams, parameters: srcParams.filter(p => isFaceParam(p.id)),
+                            originalSize: originalBgSize ? { ...originalBgSize } : { w: cs.w, h: cs.h },
                             canvasSize: cs, faceDetected: false,
                             shuchuEnabled, shuchuSettings: { ...shuchuSettings },
                         });
@@ -945,6 +950,7 @@
                             url, name: file.name, thumbnailUrl,
                             transform: { x: cs.w / 2, y: cs.h / 2, scale: 0.1, rotation: 0 },
                             allParameters: defaultAllParams, parameters: defaultParams,
+                            originalSize: { w: dims.width, h: dims.height },
                             canvasSize: cs, faceDetected: false,
                             shuchuEnabled: false, shuchuSettings: { x: cs.w / 2, y: cs.h / 2, scaleX: Math.max(cs.w / 6667, cs.h / 5000) * 1.2, scaleY: Math.max(cs.w / 6667, cs.h / 5000) * 1.2, opacity: 1.0 },
                         });
@@ -1401,7 +1407,7 @@
                 if (currentModelId) {
                     const m = savedModels.find(m => m.id === currentModelId);
                     if (m?.maskSettings?.enabled) {
-                        setMaskSettings({ y: m.maskSettings.y, radius: m.maskSettings.radius });
+                        setMaskSettings({ x: m.maskSettings.x ?? 0, y: m.maskSettings.y, radius: m.maskSettings.radius });
                         setIsMasked(true);
                     }
                 }
@@ -1412,14 +1418,63 @@
 
             const handleDownload = () => {
                 if (!pixiAppRef.current) return;
+                const app = pixiAppRef.current;
+                const resolution = app.renderer.resolution || 1;
+                const dispW = app.renderer.screen.width;
+                const dispH = app.renderer.screen.height;
+
+                // アップロード元の原寸があれば、そのサイズで書き出す
+                const origW = originalBgSize ? originalBgSize.w : dispW * resolution;
+                const origH = originalBgSize ? originalBgSize.h : dispH * resolution;
+                // PIXIのresolutionを考慮した論理ピクセルサイズ (出力 = logicalW * resolution = origW)
+                const logicalW = Math.round(origW / resolution);
+                const logicalH = Math.round(origH / resolution);
+                const needsScale = logicalW !== dispW || logicalH !== dispH;
+                const ratio = logicalW / dispW;
+
                 if (debugRingRef.current) debugRingRef.current.visible = false;
-                // 書き出し時のみ集中線PIXIスプライトを表示
-                if (shuchuSpriteRef.current && shuchuEnabled) shuchuSpriteRef.current.visible = true;
-                pixiAppRef.current.renderer.render(pixiAppRef.current.stage);
+
+                if (needsScale && bgSpriteRef.current) {
+                    bgSpriteRef.current.width = logicalW;
+                    bgSpriteRef.current.height = logicalH;
+                    app.renderer.resize(logicalW, logicalH);
+                    if (modelContainerRef.current) {
+                        const c = modelContainerRef.current;
+                        c.position.set(transform.x * ratio, transform.y * ratio);
+                        c.scale.set(transform.scale * ratio);
+                        c.rotation = transform.rotation * (Math.PI / 180);
+                    }
+                    if (shuchuSpriteRef.current && shuchuEnabled) {
+                        shuchuSpriteRef.current.position.set(shuchuSettings.x * ratio, shuchuSettings.y * ratio);
+                        shuchuSpriteRef.current.scale.set(shuchuSettings.scaleX * ratio, shuchuSettings.scaleY * ratio);
+                        shuchuSpriteRef.current.alpha = shuchuSettings.opacity;
+                        shuchuSpriteRef.current.visible = true;
+                    }
+                } else if (shuchuSpriteRef.current && shuchuEnabled) {
+                    shuchuSpriteRef.current.visible = true;
+                }
+
+                app.renderer.render(app.stage);
                 const a = document.createElement('a');
                 a.download = 'vtuber_image.png';
-                a.href = pixiAppRef.current.view.toDataURL('image/png');
+                a.href = app.view.toDataURL('image/png');
                 a.click();
+
+                // 表示サイズに戻す
+                if (needsScale && bgSpriteRef.current) {
+                    bgSpriteRef.current.width = dispW;
+                    bgSpriteRef.current.height = dispH;
+                    app.renderer.resize(dispW, dispH);
+                    if (modelContainerRef.current) {
+                        const c = modelContainerRef.current;
+                        c.position.set(transform.x, transform.y);
+                        c.scale.set(transform.scale);
+                    }
+                    if (shuchuSpriteRef.current) {
+                        shuchuSpriteRef.current.position.set(shuchuSettings.x, shuchuSettings.y);
+                        shuchuSpriteRef.current.scale.set(shuchuSettings.scaleX, shuchuSettings.scaleY);
+                    }
+                }
                 if (debugRingRef.current) debugRingRef.current.visible = true;
                 if (shuchuSpriteRef.current) shuchuSpriteRef.current.visible = false;
             };
@@ -1440,38 +1495,47 @@
                     savedImgs[currentImageIdx] = { ...savedImgs[currentImageIdx], transform, allParameters, parameters, shuchuEnabled, shuchuSettings };
                 }
 
+                const resolution = app.renderer.resolution || 1;
+
                 for (let i = 0; i < savedImgs.length; i++) {
                     setLoadingText(`画像を書き出し中... (${i + 1}/${savedImgs.length})`);
                     const img = savedImgs[i];
 
-                    // 背景差し替え
+                    // 原寸サイズを取得（なければ表示サイズにフォールバック）
+                    const origW = img.originalSize ? img.originalSize.w : img.canvasSize.w * resolution;
+                    const origH = img.originalSize ? img.originalSize.h : img.canvasSize.h * resolution;
+                    const logicalW = Math.round(origW / resolution);
+                    const logicalH = Math.round(origH / resolution);
+                    const ratio = logicalW / img.canvasSize.w;
+
+                    // 背景差し替え（原寸サイズで）
                     if (bgSpriteRef.current) {
                         app.stage.removeChild(bgSpriteRef.current);
                         bgSpriteRef.current.destroy({ texture: true, baseTexture: true });
                     }
-                    app.renderer.resize(img.canvasSize.w, img.canvasSize.h);
+                    app.renderer.resize(logicalW, logicalH);
                     const bg = window.PIXI.Sprite.from(img.url);
-                    bg.width = img.canvasSize.w; bg.height = img.canvasSize.h;
+                    bg.width = logicalW; bg.height = logicalH;
                     bg.zIndex = -1;
                     app.stage.addChildAt(bg, 0);
                     bgSpriteRef.current = bg;
 
-                    // transform適用
+                    // transform適用（原寸比率でスケール）
                     if (modelContainerRef.current) {
                         const c = modelContainerRef.current;
-                        c.position.set(img.transform.x, img.transform.y);
-                        c.scale.set(img.transform.scale);
+                        c.position.set(img.transform.x * ratio, img.transform.y * ratio);
+                        c.scale.set(img.transform.scale * ratio);
                         c.rotation = img.transform.rotation * (Math.PI / 180);
                     }
                     // パラメータ適用
                     allParametersRef.current = img.allParameters;
 
-                    // 集中線の適用（画像ごと）
+                    // 集中線の適用（画像ごと・原寸比率でスケール）
                     if (shuchuSpriteRef.current) {
                         if (img.shuchuEnabled) {
                             shuchuSpriteRef.current.visible = true;
-                            shuchuSpriteRef.current.position.set(img.shuchuSettings.x, img.shuchuSettings.y);
-                            shuchuSpriteRef.current.scale.set(img.shuchuSettings.scaleX, img.shuchuSettings.scaleY);
+                            shuchuSpriteRef.current.position.set(img.shuchuSettings.x * ratio, img.shuchuSettings.y * ratio);
+                            shuchuSpriteRef.current.scale.set(img.shuchuSettings.scaleX * ratio, img.shuchuSettings.scaleY * ratio);
                             shuchuSpriteRef.current.alpha = img.shuchuSettings.opacity;
                         } else {
                             shuchuSpriteRef.current.visible = false;
